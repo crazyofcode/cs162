@@ -19,7 +19,7 @@ word_count provides lists of words and associated count
 Functional methods take the head of a list as first arg.
 Mutators take a reference to a list as first arg.
 */
-
+#include "assert.h"
 #include "word_count.h"
 
 /* Basic utilities */
@@ -46,13 +46,30 @@ ssize_t len_words(WordCount *wchead) {
      encountered in the body of
      this function.
   */
-    size_t len = 0;
-    return len;
+  size_t len = 0;
+  if (wchead == NULL) {
+    return -1;
+  }
+  WordCount *wcnext = wchead;
+  while (wcnext != NULL) {
+    ++len;
+    wcnext = wcnext->next;
+  }
+  return len;
 }
 
 WordCount *find_word(WordCount *wchead, char *word) {
   /* Return count for word, if it exists */
   WordCount *wc = NULL;
+  WordCount *wcnext = wchead;
+  while (wcnext != NULL) {
+    if (!strcmp(wcnext->word, word)) {
+      wc = wcnext;
+      break;
+    } else {
+      wcnext = wcnext->next;
+    }
+  }
   return wc;
 }
 
@@ -61,11 +78,46 @@ int add_word(WordCount **wclist, char *word) {
      Otherwise insert with count 1.
      Returns 0 if no errors are encountered in the body of this function; 1 otherwise.
   */
- return 0;
+  if (wclist == NULL || word == NULL)
+    return 1;
+
+  WordCount *wchead = *wclist;
+  WordCount *node = find_word(wchead, word);
+  if (node != NULL) {
+    node->count ++;
+    return 0;
+  }
+
+  node = malloc(sizeof(WordCount));
+  if (node == NULL) {
+    goto bad;
+  }
+  node->word = malloc(strlen(word)+1);
+  if (node->word == NULL) {
+    free(node);
+    goto bad;
+  }
+  node->count = 1;
+  strcpy(node->word, word);
+  if (wchead == NULL) {
+    *wclist = node;
+  } else {
+    node->next = wchead;
+    *wclist = node;
+  }
+  
+  return 0;
+bad:
+    printf("malloc fault\n");
+    return 1;
 }
 
 void fprint_words(WordCount *wchead, FILE *ofile) {
   /* print word counts to a file */
+  if (wchead == NULL) {
+    printf("wclist is NULL\n");
+    return;
+  }
   WordCount *wc;
   for (wc = wchead; wc; wc = wc->next) {
     fprintf(ofile, "%i\t%s\n", wc->count, wc->word);
