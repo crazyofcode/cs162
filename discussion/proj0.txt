@@ -1,0 +1,78 @@
+1. what virtual address did the programe try to access from userspace that caused it to crash? Why is the programe not allowed to access this memory 
+address at this point?
+	page fault at 0xc0000008
+	user virtual address space at 0 up to PHYS_BASE(0xc0000000), kernal virtual address space form PHYS_BASE up to 4GB, so 0xc0000008 is kernal virtual
+	virtual space.
+2. What is the virtual adress of instruction that resulted in th e crash?
+	在32位的操作系统中, eip 用于保存程序计数器, 所以导致系统崩溃的指令的虚拟地址是 eip=0x8048915
+3. what is the ame of the function the programe was in when it crashed?
+	the instruction is mov	0xc(%ebp), %eax at _start
+4. Find the C code for the function you identified above
+	void _start(int argc, char* argv[]) { exit(main(argc, argv)); }
+5. Why did the instruction you identified in #3 try to acess memory at the virtual address you identified in #1?
+	因为调用 main 函数时需要给它传递参数, 而参数的来源是 _start 函数接受的参数, 在复制的时候访问到了内核态的地址空间, 猜测是没有从内核栈切换到用户栈导致
+	的异常
+
+1. Step into the process_execute function. What is the name and address of the thread running this function? What other threads are present in Pintos at
+this time?
+	thread name: main		adress: 0xc002d43a
+	other threads: idle(BLOCKED)
+	pintos-debug: dumplist #0: 0xc000e000 {tid = 1, status = THREAD_RUNNING, name = "main", '\000' <repeats 11 times>,
+		stack = 0xc000edbc "\335\322\002\300\n", priority = 31, allelem = {prev = 0xc003b19c <all_list>, next = 0xc0104020}, elem = {
+		prev = 0xc003b18c <fifo_ready_list>, next = 0xc003b194 <fifo_ready_list+8>}, pcb = 0xc010500c, magic = 3446325067}
+	pintos-debug: dumplist #1: 0xc0104000 {tid = 2, status = THREAD_BLOCKED, name = "idle", '\000' <repeats 11 times>,
+		stack = 0xc0104f14 "", priority = 0, allelem = {prev = 0xc000e020, next = 0xc003b1a4 <all_list+8>}, elem = {
+		prev = 0xc003b18c <fifo_ready_list>, next = 0xc003b194 <fifo_ready_list+8>}, pcb = 0x0, magic = 3446325067}
+2. What is the backtrace for the current thread? Copy the backtrace from GDB as your answer and also copy down the line of C code corresponding to each
+function call.
+	backtrace:
+		#0  process_execute (file_name=0xc0007d50 "do-nothing") at ../../userprog/process.c:57
+		#1  0xc0020a62 in run_task (argv=0xc003b08c <argv+12>) at ../../threads/init.c:315
+		#2  0xc0020ba4 in run_actions (argv=0xc003b08c <argv+12>) at ../../threads/init.c:388
+		#3  0xc0020421 in main () at ../../threads/init.c:136
+	C code:
+
+3. Set a breakpoint at start_process and continue to that point. What is the name and address of the thread running this function? What other threads are
+present in Pintos at this time? Copy their struct threads.
+	pintos-debug: dumplist #0: 0xc000e000 {tid = 1, status = THREAD_BLOCKED, name = "main", '\000' <repeats 11 times>,
+		stack = 0xc000ee7c "", priority = 31, allelem = {prev = 0xc003b19c <all_list>, next = 0xc0104020}, elem = {
+		prev = 0xc003cbb8 <temporary+4>, next = 0xc003cbc0 <temporary+12>}, pcb = 0xc010500c, magic = 3446325067}
+	pintos-debug: dumplist #1: 0xc0104000 {tid = 2, status = THREAD_BLOCKED, name = "idle", '\000' <repeats 11 times>,
+		stack = 0xc0104f14 "", priority = 0, allelem = {prev = 0xc000e020, next = 0xc010b020}, elem = {prev = 0xc003b18c <fifo_ready_list>,
+		next = 0xc003b194 <fifo_ready_list+8>}, pcb = 0x0, magic = 3446325067}
+	pintos-debug: dumplist #2: 0xc010b000 {tid = 3, status = THREAD_RUNNING, name = "do-nothing\000\000\000\000\000",
+		stack = 0xc010bfd4 "", priority = 31, allelem = {prev = 0xc0104020, next = 0xc003b1a4 <all_list+8>}, elem = {
+		prev = 0xc003b18c <fifo_ready_list>, next = 0xc003b194 <fifo_ready_list+8>}, pcb = 0x0, magic = 3446325067}
+4. Step through the start_process function until you have stepped over the call to load. Note that load sets the eip and esp fields in the if_ structure.
+Print out the value of the if_ structure, displaying the values in hex (hint: print/x if_)4. Step through the start_process function until you have 
+stepped over the call to load. Note that load sets the eip and esp fields in the if_ structure. Print out the value of the if_ structure, displaying the
+value i hex.
+	before load:
+	i
+	$1 = {edi = 0x0, esi = 0x0, ebp = 0x0, esp_dummy = 0x0, ebx = 0x0, edx = 0x0, ecx = 0x0, eax = 0x0, gs = 0x23, fs = 0x23, es = 0x23, 
+		ds = 0x23, vec_no = 0x0, error_code = 0x0, frame_pointer = 0x0, eip = 0x0, cs = 0x1b, eflags = 0x202, esp = 0x0, ss = 0x23}
+	after load:
+		$2 = {edi = 0x0, esi = 0x0, ebp = 0x0, esp_dummy = 0x0, ebx = 0x0, edx = 0x0, ecx = 0x0, eax = 0x0, gs = 0x23, fs = 0x23, es = 0x23,
+			ds = 0x23, vec_no = 0x0, error_code = 0x0, frame_pointer = 0x0, eip = 0x804890f, cs = 0x1b, eflags = 0x202,
+			esp = 0xc0000000, ss = 0x23}
+5. The first instruction in the asm volatile statement sets the stack pointer to the bottom of the if_ structure. The second one jumps to intr_exit.
+The comments in the code explain what’s happening here. Step into the asm volatile statement, and then step through the instructions. As you step through 
+the iret instruction, observe that the function “returns” into userspace. Why does the processor switch modes when executing this function? Feel free to 
+explain this in terms of the values in memory and/or registers at the time iret is executed, and the functionality of the iret instruction.
+	在执行一个用户程序时，需要切换到内核空间创建线程和初始化地址空间, 然后回到用户模式, 只允许该用户程序访问自己的的地址空间尽可能的博爱正系统的安全
+	和稳定
+6. Once you’ve executed iret, type info registers to print out the contents of registers. Include the output of this command on Gradescope. How do these
+values compare to those when you printed out if_?
+	它们的值是保持一致的
+7. Notice that if you try to get your current location with backtrace you’ll only get a hex address. This is because because the debugger only loads
+in the symbols from the kernel. Now that we are in userspace, we have to load in the symbols from the Pintos executable we are running, namely do-nothing.
+To do this, use loadusersymbols tests/userprog/do-nothing. Now, using backtrace, you’ll see that you’re currently in the _start function. Using the 
+disassemble and stepi commands, step through userspace instruction by instruction until the page fault occurs. At this point, the processor has 
+immediately entered kernel mode to handle the page fault, so backtrace will show the current stack in kernel mode, not the user stack at the time of the
+page fault. However, you can use btpagefault to find the user stack at the time of the page fault. Copy down the output of btpagefault.
+	#0  _start (argc=-268370093, argv=0xf000ff53) at ../../lib/user/entry.c:6
+	#1  0xf000ff53 in ?? ()
+8. Using the disassemble and stepi commands, execute the do-nothing program instruction by instruction until you reach the int $0x30 instruction in 
+proj-pregame/src/lib/user/syscall.c. At this point, print the top two words at the top of the stack by examining memory
+	0x00000001      0x000000a2
+9. args[0] = 0x1 args[1] = 0xa2
