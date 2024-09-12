@@ -1,0 +1,10 @@
+1. Is the programe's output the same each time it is run? Why or why not?
+每次运行的结果不一定都是相同的, 每次运行调度的顺序也不一定相同, 即 thread 的执行顺序不同, 有调度器决定, 就会出现不同的输出顺序.
+2. Base on the programe's output, do multiple thread share the same stack?
+No, 因为每个 thread 的局部变量 tid 并没有互相影响, 可以通过输出的 tid 的值和输出字符串的内容看出.
+3. Base on the programe's output, do multiple thread share the same global veriables?
+有共享的 heap, 因为字符串是保存到 heap 上的, 而每个 thread 访问到的字符串的数据是相同的, 只是 tid 不同, 导致输出字符串的起始位置不同, 从而输出结果不同.
+4. Based on the program’s output, what is the value of void *threadid? How does this relate to the variable’s type (void *)? 
+是 pthread_create 创建线程时传递的参数, 这里是 thread id, void * 是一个通用的类型可以转换成任意需要的类型
+5. Using the first command line argument, create a large number of threads in pthread. Do all threads run before the program exits? Why or why not?
+不一定, 因为 pthread_create 指挥退出调用他的进程其他的进程会继续运行指导运行结束, 可以通过使用 pthread_join 让所有的进程都在程序结束前运行.
