@@ -42,6 +42,8 @@ void userprog_init(void) {
   t->pcb = calloc(sizeof(struct process), 1);
   success = t->pcb != NULL;
 
+  sema_init(&t->pcb->sema_exec, 0);
+  list_init(&t->pcb->child_list);
   /* Kill the kernel if we did not succeed */
   ASSERT(success);
 }
@@ -67,12 +69,10 @@ pid_t process_execute(const char* file_name) {
   if (tid == TID_ERROR)
     palloc_free_page(fn_copy);
   else {
-    sema_down(&thread_current()->sema_exec);
-    if (!thread_current()->success) {
-      return -1;
-    }
+    sema_down(&thread_current()->pcb->sema_exec);
+    if (thread_current()->pcb->load_success) return tid;
   }
-  return tid;
+  return -1;
 }
 
 /* A thread function that loads a user process and starts it
@@ -98,6 +98,14 @@ static void start_process(void* file_name_) {
 
     // Continue initializing the PCB as normal
     t->pcb->main_thread = t;
+    t->pcb->exit_state = 0;
+    t->pcb->pid = t->tid;
+    t->pcb->fd = 2;
+    // t->pcb->entry = NULL;
+    sema_init(&t->pcb->sema_exec, 0);
+    list_init(&t->pcb->child_list);
+    list_init(&t->pcb->file);
+    lock_init(&t->pcb->file_lock);
     strlcpy(t->pcb->process_name, file_name, sizeof t->name);
   }
 
@@ -110,41 +118,44 @@ static void start_process(void* file_name_) {
     success = load(file_name, &if_.eip, &if_.esp);
   }
 
-  size_t argc = 0;
-  void *argv[64];
-  char *token = file_name;
-  // setup argumants
-  while (token != NULL) {
-    size_t length = strlen(token) + 1;  // +1 for '\0'
-    if_.esp -= length;
-    memcpy(if_.esp, token, length);
-    token = strtok_r(NULL, " ", &saveptr);
-    argv[argc++] = if_.esp;
-    // handle arguments too many
-    if (argc >= 64) {
-      printf("Failure: too many arguments\n");
+  if (success) {
+    size_t argc = 0;
+    void *argv[64];
+    char *token = file_name;
+    // setup argumants
+    while (token != NULL) {
+      size_t length = strlen(token) + 1;  // +1 for '\0'
+      if_.esp -= length;
+      memcpy(if_.esp, token, length);
+      token = strtok_r(NULL, " ", &saveptr);
+      argv[argc++] = if_.esp;
+      // handle arguments too many
+      if (argc >= 64) {
+        printf("Failure: too many arguments\n");
+      }
     }
+    // address align
+    size_t ptr_size = sizeof(void *);
+    size_t align_len = ((size_t)if_.esp & 0x0f) + (0x10 - ((argc+3)*ptr_size & 0xf));
+    if_.esp -= align_len;
+    memset(if_.esp, 0, align_len);
+    // set argv[i]
+    if_.esp -= ptr_size;
+    memset(if_.esp, 0, ptr_size);
+
+    if_.esp -= argc * ptr_size;
+    memcpy(if_.esp, argv, argc * ptr_size);
+
+    uintptr_t argv_addr = (uintptr_t)if_.esp;
+    if_.esp -= ptr_size;
+    *((uintptr_t *)if_.esp) = argv_addr;
+
+    if_.esp -= ptr_size;
+    *((size_t *)if_.esp) = argc;
+
+    if_.esp -= ptr_size;
+    memset(if_.esp, 0, ptr_size);
   }
-  // address align
-  size_t align_len = (size_t)if_.esp & 0x0f;
-  if_.esp -= align_len;
-  memset(if_.esp, 0, align_len);
-  // set argv[i]
-  size_t ptr_size = sizeof(void *);
-  if_.esp -= ptr_size;
-  memset(if_.esp, 0, ptr_size);
-
-  if_.esp -= argc * ptr_size;
-  memcpy(if_.esp, argv, argc * ptr_size);
-
-  if_.esp -= ptr_size;
-  *((uintptr_t *)if_.esp) = (uintptr_t)if_.esp + ptr_size;
-
-  if_.esp -= ptr_size;
-  *((size_t *)if_.esp) = argc;
-
-  if_.esp -= ptr_size;
-  memset(if_.esp, 0, ptr_size);
 
   /* Handle failure with succesful PCB malloc. Must free the PCB */
   if (!success && pcb_success) {
@@ -159,14 +170,26 @@ static void start_process(void* file_name_) {
   /* Clean up. Exit on failure or jump to userspace */
   palloc_free_page(file_name);
   if (!success) {
-    t->child->alive = false;
-    t->exit_status = -1;
-    t->parent->success = false;
-    sema_up(&t->parent->sema_exec);
+    t->parent->pcb->load_success = false;
+    sema_up(&t->parent->pcb->sema_exec);
     thread_exit();
   }
-  t->parent->success = true;
-  sema_up(&t->parent->sema_exec);
+
+  // if (t->parent->pcb->child == NULL)  t->parent->pcb->child = malloc( sizeof(struct child_entry) );
+  // 将该 process 的信息保存到 parent 的 child_list 中
+  if (t->parent != NULL) {
+    // struct child_entry *entry = t->parent->pcb->child;
+    struct child_entry *entry = malloc(sizeof (struct child_entry));
+    entry->pid        = t->pcb->pid;
+    entry->t          = t;
+    entry->is_waiting = false;
+    entry->alive      = true;
+    entry->exit_state = 0;
+    sema_init(&entry->sema_wait, 0);
+    list_push_back(&t->parent->pcb->child_list, &entry->elem);
+  }
+  t->parent->pcb->load_success = true;
+  sema_up(&t->parent->pcb->sema_exec);
   /* Start the user process by simulating a return from an
      interrupt, implemented by intr_exit (in
      threads/intr-stubs.S).  Because intr_exit takes all of its
@@ -188,20 +211,28 @@ static void start_process(void* file_name_) {
    does nothing. */
 int process_wait(pid_t child_pid UNUSED) {
   struct list_elem *e;
-  struct thread *t = thread_current();
-  for (e = list_begin(&t->child_list); e != list_end(&t->child_list); e = list_next(e)) {
-    struct child_entry *p = list_entry(e, struct child_entry, elem);
-    if (p->pid == child_pid) {
-      if (!p->is_waiting && p->alive) {
-        p->is_waiting = true;
-        sema_down(&p->wait_sema);
-        list_remove(&p->elem);
-        // printf("p->exit_status: %d, t->exit_status: %d\n", p->exit_status, t->exit_status);
-        return t->exit_status;
-      } else if (!p->alive && !p->is_waiting) {
-        return t->exit_status;
+  int ret;
+  struct process *p = thread_current()->pcb;
+  for (e = list_begin(&p->child_list); e != list_end(&p->child_list); e = list_next(e)) {
+    struct child_entry *entry = list_entry(e, struct child_entry, elem);
+    if (entry->pid == child_pid) {
+      if (entry->alive && !entry->is_waiting) {
+        entry->is_waiting = true;
+        sema_down(&entry->sema_wait);
+        ret = entry->exit_state;
+        list_remove(&entry->elem);
+        free(entry);
+        return ret;
+      } else if (!entry->alive && !entry->is_waiting){
+        entry->is_waiting = true;
+        ret = entry->exit_state;
+        list_remove(&entry->elem);
+        free(entry);
+        return ret;
+      } else {
+        return -1;
       }
-    }
+    } 
   }
   return -1;
 }
@@ -209,33 +240,47 @@ int process_wait(pid_t child_pid UNUSED) {
 /* Free the current process's resources. */
 void process_exit(void) {
   struct thread* cur = thread_current();
+  printf("%s: exit(%d)\n", cur->pcb->process_name, cur->pcb->exit_state);
   uint32_t* pd;
 
-  printf("%s: exit(%d)\n", cur->pcb->process_name, cur->exit_status);
   /* If this thread does not have a PCB, don't worry */
   if (cur->pcb == NULL) {
     thread_exit();
     NOT_REACHED();
   }
 
-  // child process
   struct list_elem *e;
-  for (e = list_begin(&cur->child_list); e != list_end(&cur->child_list); e = list_next(e)) {
-    struct child_entry *p = list_entry(e, struct child_entry, elem);
-    if (p->alive) {
-      p->t->parent = NULL;
+  // 如果存在父进程, 需要向父进程提交信息
+  if (cur->parent != NULL) {
+    for (e = list_begin(&cur->parent->pcb->child_list); e != list_end(&cur->parent->pcb->child_list);
+          e = list_next(e)) {
+        struct child_entry *entry = list_entry(e, struct child_entry, elem);
+        if (entry->pid == cur->pcb->pid) {
+          entry->alive = false;
+          entry->exit_state = cur->pcb->exit_state;
+          if (entry->is_waiting)
+            sema_up(&entry->sema_wait);
+          break;
+        }
     }
   }
-  if (cur->parent == NULL) {
-    free(cur->child);
-  } else {
-    cur->parent->exit_status = cur->exit_status;
-    if (cur->child->is_waiting) {
-      sema_up(&cur->child->wait_sema);
-    }
-    cur->child->alive = false;
-    cur->child->t = NULL;
+
+  // 关闭打开的文件
+  lock_acquire(&cur->pcb->file_lock);
+  for (e = list_begin(&cur->pcb->file); e != list_end(&cur->pcb->file); e = list_next(e)) {
+    struct file_entry *entry = list_entry(e, struct file_entry, elem);
+    file_close(entry->file);
   }
+  lock_release(&cur->pcb->file_lock);
+  // if (cur->pcb->entry != NULL)  free(cur->pcb->entry);
+  for (e = list_begin(&cur->pcb->child_list); e != list_end(&cur->pcb->child_list); e = 
+            list_next(e)) {
+    struct child_entry *entry = list_entry(e, struct child_entry, elem);
+    if (entry->alive) entry->t->parent = NULL;
+    list_remove(&entry->elem);
+    free(entry);
+  }
+
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = cur->pcb->pagedir;
@@ -260,7 +305,7 @@ void process_exit(void) {
   cur->pcb = NULL;
   free(pcb_to_free);
 
-  sema_up(&temporary);
+  // sema_up(&temporary);
   thread_exit();
 }
 
