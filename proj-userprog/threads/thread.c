@@ -11,7 +11,6 @@
 #include "threads/switch.h"
 #include "threads/synch.h"
 #include "threads/vaddr.h"
-#include "threads/malloc.h"
 #ifdef USERPROG
 #include "userprog/process.h"
 #endif
@@ -191,18 +190,8 @@ tid_t thread_create(const char* name, int priority, thread_func* function, void*
   /* Initialize thread. */
   init_thread(t, name, priority);
   tid = t->tid = allocate_tid();
-
-  t->child = malloc(sizeof(struct child_entry));
-  t->child->pid = tid;
-  t->child->is_waiting = false;
-  t->child->alive = true;
-  t->child->t = t;
-  t->child->exit_status = 0;
-  sema_init(&t->child->wait_sema, 0);
-  t->exit_status = 0;
-
+  // 记录父进程的 main thread
   t->parent = thread_current();
-  list_push_back(&t->parent->child_list, &t->child->elem);
 
   /* Stack frame for kernel_thread(). */
   kf = alloc_frame(t, sizeof *kf);
@@ -442,9 +431,8 @@ static void init_thread(struct thread* t, const char* name, int priority) {
   t->stack = (uint8_t*)t + PGSIZE;
   t->priority = priority;
   t->pcb = NULL;
+  t->parent = NULL;
   t->magic = THREAD_MAGIC;
-  list_init(&t->child_list);
-  sema_init(&t->sema_exec, 0);
 
   old_level = intr_disable();
   list_push_back(&all_list, &t->allelem);
