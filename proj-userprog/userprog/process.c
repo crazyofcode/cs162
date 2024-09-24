@@ -115,6 +115,7 @@ static void start_process(void* file_name_) {
     if_.gs = if_.fs = if_.es = if_.ds = if_.ss = SEL_UDSEG;
     if_.cs = SEL_UCSEG;
     if_.eflags = FLAG_IF | FLAG_MBS;
+    asm volatile("fsave %0" : "=m"(if_.fpu));
     success = load(file_name, &if_.eip, &if_.esp);
   }
 
@@ -267,9 +268,12 @@ void process_exit(void) {
 
   // 关闭打开的文件
   lock_acquire(&cur->pcb->file_lock);
-  for (e = list_begin(&cur->pcb->file); e != list_end(&cur->pcb->file); e = list_next(e)) {
+  for (e = list_begin(&cur->pcb->file); e != list_end(&cur->pcb->file); ) {
     struct file_entry *entry = list_entry(e, struct file_entry, elem);
+    e = list_next(e);
     file_close(entry->file);
+    list_remove(&entry->elem);
+    free(entry);
   }
   lock_release(&cur->pcb->file_lock);
   // if (cur->pcb->entry != NULL)  free(cur->pcb->entry);
@@ -281,6 +285,8 @@ void process_exit(void) {
     free(entry);
   }
 
+  file_allow_write(cur->pcb->exec_file);
+  file_close(cur->pcb->exec_file);
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = cur->pcb->pagedir;
@@ -482,10 +488,12 @@ bool load(const char* file_name, void (**eip)(void), void** esp) {
   *eip = (void (*)(void))ehdr.e_entry;
 
   success = true;
+  file_deny_write(file);
+  t->pcb->exec_file = file;
 
 done:
   /* We arrive here whether the load is successful or not. */
-  file_close(file);
+  // file_close(file);
   return success;
 }
 
