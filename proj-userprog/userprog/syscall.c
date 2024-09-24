@@ -174,8 +174,8 @@ static pid_t exec(const char *cmd_line) {
   }
   return process_execute(cmd_line);
 }
-static double compute_e(int n) {
-  return (double)sys_sum_to_e(n);
+static int compute_e(int n) {
+  return sys_sum_to_e(n);
 }
 
 static void syscall_handler(struct intr_frame* f UNUSED) {

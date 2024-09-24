@@ -56,8 +56,8 @@ struct process {
   int fd;
   struct lock file_lock;
   struct list file;
-  // struct file_entry  *entry;
-  // exec file
+
+  struct file *exec_file;
 };
 
 void userprog_init(void);
