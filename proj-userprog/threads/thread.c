@@ -207,6 +207,17 @@ tid_t thread_create(const char* name, int priority, thread_func* function, void*
   sf = alloc_frame(t, sizeof *sf);
   sf->eip = switch_entry;
   sf->ebp = 0;
+  /* Need to save the current FPU State on the stack. */
+  uint8_t fpu_old_thread[108];
+  asm volatile("fsave %0" : "=m"(fpu_old_thread));
+
+  /* Now we can initialize the FPU since we already saved the current state. */
+  /* And we must save that new FPU to the sp->fpu. */
+  asm volatile("fninit");
+  asm volatile("fsave %0" : "=m"(sf->fpu));
+
+  /* Now we can restore the current state. */
+  asm volatile("frstor %0" : : "m"(fpu_old_thread));
 
   /* Add to run queue. */
   thread_unblock(t);
