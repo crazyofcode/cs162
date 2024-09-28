@@ -13,6 +13,10 @@
 
 #include "tokenizer.h"
 
+#define MAX_PROCESS 64
+// pids arr
+pid_t jobs[MAX_PROCESS];
+int prog_num;
 /* Convenience macro to silence compiler warnings about unused function parameters. */
 #define unused __attribute__((unused))
 
@@ -172,6 +176,7 @@ int parseLine(char **argv, struct tokens *tokens, int idx) {
     return i;
   else return 0;
 }
+
 int execute(char ***argv, int prog_num) {
   if (prog_num == 1)  return execv(argv[0][0], argv[0]);
 
@@ -187,6 +192,7 @@ int execute(char ***argv, int prog_num) {
   for (int i = 0; i < prog_num; i++) {
     pid = fork();
     if (pid == 0) {  // 子进程
+      jobs[i+1] = pid;
       if (i == 0) {
         // 第一个进程：只需要重定向 stdout 到 pipe
         dup2(pipe_arr[i][1], STDOUT_FILENO);
@@ -229,6 +235,21 @@ int execute(char ***argv, int prog_num) {
   return state;
 }
 
+void dispatch_signal(int sig) {
+  if (jobs[0] > 0) {
+    kill(jobs[0], sig);
+  }
+  // 输出提示信息并继续等待
+  if (shell_is_interactive) {
+    fprintf(stdout, "Signal %d sent to job %d. Waiting for next command.\n", sig, jobs[0]);
+  }
+}
+
+void dispatch_signal_and_exit(int sig) {
+  for (int i = 0; i < prog_num; i++) {
+    kill(jobs[i], sig);
+  }
+}
 int main(unused int argc, unused char* argv[]) {
   init_shell();
 
@@ -256,11 +277,15 @@ int main(unused int argc, unused char* argv[]) {
     } else {
       /* REPLACE this to run commands as programs. */
       // fprintf(stdout, "This shell doesn't know how to run programs.\n");
+      signal(SIGINT, dispatch_signal);
+      signal(SIGTSTP, dispatch_signal);
       pid_t pid = fork();
       if (pid == 0) {
+        signal(SIGINT, dispatch_signal_and_exit);
+        signal(SIGTSTP, dispatch_signal_and_exit);
         char **argv[8];
         int idx = 0;
-        int prog_num = 0;
+        prog_num = 0;
         for (int i = 0; i < 8; i++) {
           ++prog_num;
           argv[i] = malloc(sizeof(char **));
@@ -275,6 +300,7 @@ int main(unused int argc, unused char* argv[]) {
         }
         exit(state);
       } else if (pid > 0){
+        jobs[0] = pid;
         int status;
         waitpid(pid, &status, 0);
       } else {
