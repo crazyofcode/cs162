@@ -24,6 +24,8 @@
    that are ready to run but not actually running. */
 static struct list fifo_ready_list;
 
+static struct list prio_ready_list;
+
 /* List of all processes.  Processes are added to this list
    when they are first scheduled and removed when they exit. */
 static struct list all_list;
@@ -108,6 +110,7 @@ void thread_init(void) {
 
   lock_init(&tid_lock);
   list_init(&fifo_ready_list);
+  list_init(&prio_ready_list);
   list_init(&all_list);
 
   /* Set up a thread structure for the running thread. */
@@ -239,6 +242,19 @@ void thread_block(void) {
   schedule();
 }
 
+static void prio_list_push_back(struct list *list, struct thread *t) {
+  struct list_elem *e;
+  for (e = list_begin(list); e != list_end(list); e = list_next(e)) {
+    struct thread *tmp = list_entry(e, struct thread, elem);
+    if (tmp->priority < t->priority) {
+      list_insert(&tmp->elem, &t->elem);
+      break;
+    }
+  }
+  if (e == list_end(list)) {
+    list_push_back(list, &t->elem);
+  }
+}
 /* Places a thread on the ready structure appropriate for the
    current active scheduling policy.
    
@@ -249,6 +265,8 @@ static void thread_enqueue(struct thread* t) {
 
   if (active_sched_policy == SCHED_FIFO)
     list_push_back(&fifo_ready_list, &t->elem);
+  else if (active_sched_policy == SCHED_PRIO)
+    prio_list_push_back(&prio_ready_list, t);
   else
     PANIC("Unimplemented scheduling policy value: %d", active_sched_policy);
 }
@@ -471,7 +489,11 @@ static struct thread* thread_schedule_fifo(void) {
 
 /* Strict priority scheduler */
 static struct thread* thread_schedule_prio(void) {
-  PANIC("Unimplemented scheduler policy: \"-sched=prio\"");
+  // PANIC("Unimplemented scheduler policy: \"-sched=prio\"");
+  if (!list_empty(&prio_ready_list))
+    return list_entry(list_pop_front(&prio_ready_list), struct thread, elem);
+  else
+    return idle_thread;
 }
 
 /* Fair priority scheduler */
