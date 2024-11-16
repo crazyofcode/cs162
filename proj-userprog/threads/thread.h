@@ -92,6 +92,8 @@ struct thread {
 
   /* Shared between thread.c and synch.c. */
   struct list_elem elem; /* List element. */
+  int64_t         ticks;
+  struct list_elem sleep_elem;
 
 #ifdef USERPROG
   /* Owned by process.c. */

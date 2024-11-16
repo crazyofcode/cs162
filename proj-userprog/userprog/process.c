@@ -277,11 +277,10 @@ void process_exit(void) {
   }
   lock_release(&cur->pcb->file_lock);
   // if (cur->pcb->entry != NULL)  free(cur->pcb->entry);
-  for (e = list_begin(&cur->pcb->child_list); e != list_end(&cur->pcb->child_list); e = 
-            list_next(e)) {
+  for (e = list_begin(&cur->pcb->child_list); e != list_end(&cur->pcb->child_list); ) {
     struct child_entry *entry = list_entry(e, struct child_entry, elem);
     if (entry->alive) entry->t->parent = NULL;
-    list_remove(&entry->elem);
+    e = list_remove(&entry->elem);
     free(entry);
   }
 
