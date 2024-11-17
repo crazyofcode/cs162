@@ -7,6 +7,7 @@
 void* (*mm_malloc)(size_t);
 void* (*mm_realloc)(void*, size_t);
 void (*mm_free)(void*);
+void (*mem_free)(void);
 
 static void* try_dlsym(void* handle, const char* symbol) {
   char* error;
@@ -28,6 +29,7 @@ static void load_alloc_functions() {
   mm_malloc = try_dlsym(handle, "mm_malloc");
   mm_realloc = try_dlsym(handle, "mm_realloc");
   mm_free = try_dlsym(handle, "mm_free");
+  mem_free = try_dlsym(handle, "mem_free");
 }
 
 int main() {
@@ -37,5 +39,6 @@ int main() {
   assert(data != NULL);
   data[0] = 0x162;
   mm_free(data);
+  mem_free();
   puts("malloc test successful!");
 }
