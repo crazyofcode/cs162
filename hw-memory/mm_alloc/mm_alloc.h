@@ -11,6 +11,7 @@
 
 #include <stdlib.h>
 
+void mem_free();
 void* mm_malloc(size_t size);
 void* mm_realloc(void* ptr, size_t size);
 void mm_free(void* ptr);
