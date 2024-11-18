@@ -38,8 +38,16 @@ char* echo(char* input) {
   CLIENT *clnt = clnt_connect(HOST);
 
   char* ret;
+  char **result;
 
   /* TODO */
+  result = echo_1(&input, clnt);
+  if (result == NULL) {
+    clnt_perror(clnt, "call failed");
+    exit(1);
+  }
+  ret = *result;
+  xdr_free((xdrproc_t)xdr_int, (char *)result);
 
   clnt_destroy(clnt);
   
@@ -50,6 +58,10 @@ void put(buf key, buf value) {
   CLIENT *clnt = clnt_connect(HOST);
 
   /* TODO */
+  struct argv input;
+  input.key = key;
+  input.value = value;
+  put_1(&input, clnt);
 
   clnt_destroy(clnt);
 }
@@ -60,6 +72,10 @@ buf* get(buf key) {
   buf* ret;
 
   /* TODO */
+  ret = get_1(&key, clnt);
+  if (ret == NULL) {
+    clnt_perror(clnt, "not present");
+  }
 
   clnt_destroy(clnt);
   
