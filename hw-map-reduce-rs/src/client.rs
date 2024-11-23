@@ -67,10 +67,8 @@ pub async fn postprocess_job(output_dir: &str, app: &str, n_reduce: u32) -> Resu
     let mut intermediate = Vec::new();
     for i in 0..n_reduce {
         let output_dir_path = Path::new(output_dir);
-        let filename_tmp = format!("mr-out-{}", i);
-        let f_clone = filename_tmp.clone();
-        let filename = output_dir_path.join(filename_tmp);
-        log::debug!("Postprocessing file {}", &f_clone);
+        let filename = output_dir_path.join(format!("mr-out-{}", i));
+        log::debug!("Postprocessing file {}", filename.display());
 
         let file = tokio::fs::File::open(&filename).await?;
         let mut transport = Framed::new(file, LengthDelimitedCodec::new());

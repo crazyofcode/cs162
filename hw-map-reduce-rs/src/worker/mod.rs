@@ -21,6 +21,7 @@ use tonic::Code;
 use tonic::Request;
 use tonic::Response;
 use tonic::Status;
+use std::path::Path;
 
 use crate::rpc::coordinator::*;
 use crate::rpc::worker::*;
@@ -135,8 +136,9 @@ impl Worker {
         }
 
         let buf = writer.finish().freeze();
-        let name = format!("{}/mr-out-{}", output_dir, task);
-        let mut out_file = tokio::fs::File::create(name).await?;
+        let output_dir_path = Path::new(output_dir);
+        let filename = output_dir_path.join(format!("mr-out-{}", task));
+        let mut out_file = tokio::fs::File::create(&filename).await?;
         out_file.write_all(&buf).await?;
 
         Ok(None)
