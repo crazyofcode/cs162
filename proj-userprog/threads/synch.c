@@ -249,10 +249,10 @@ static int find_prio(struct lock* lock) {
         // 遍历当前锁的等待队列中的所有线程，检查它们的优先级
         struct list_elem *ej = NULL;
         for (ej = list_begin(&tmp_lock->semaphore.waiters); ej != list_end(&tmp_lock->semaphore.waiters); ej = list_next(ej)) {
-            struct thread *tmp_thread = list_entry(ej, struct thread, elem);
-            if (tmp_thread->priority > max) {
-                max = tmp_thread->priority;  // 更新最大优先级
-            }
+          struct thread *tmp_thread = list_entry(ej, struct thread, elem);
+          if (tmp_thread->priority > max) {
+              max = tmp_thread->priority;  // 更新最大优先级
+          }
         }
     }
 

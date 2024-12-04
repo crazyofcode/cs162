@@ -16,6 +16,8 @@ typedef tid_t pid_t;
 /* Thread functions (Project 2: Multithreading) */
 typedef void (*pthread_fun)(void*);
 typedef void (*stub_fun)(pthread_fun, void*);
+typedef char  lock_t;
+typedef char  sema_t;
 
 struct file_entry {
    struct file *file;
@@ -58,6 +60,45 @@ struct process {
   struct list file;
 
   struct file *exec_file;
+
+  // user thread
+  struct list user_thread;
+  struct lock user_thread_lock;
+  struct semaphore wait_main;
+
+  // user synth
+  struct list lock_list;
+  struct list sema_list;
+};
+
+struct pthread {
+  tid_t       tid;
+  uint8_t *   stack;
+  bool        is_waiting;
+  struct semaphore sema_wait;
+  struct list_elem elem;
+};
+
+struct pthread_data {
+  bool        success;
+  pthread_fun tf;
+  stub_fun    sf;
+  void *      arg;
+  struct pthread *pthread;
+  struct semaphore sema;
+  tid_t       tid;
+};
+
+struct user_lock {
+  lock_t      id;
+  struct lock lock;
+  struct list_elem elem;
+};
+
+struct user_sema {
+  sema_t           id;
+  struct semaphore sema;
+  struct list_elem elem;
 };
 
 void userprog_init(void);
