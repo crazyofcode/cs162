@@ -177,6 +177,127 @@ static pid_t exec(const char *cmd_line) {
 static int compute_e(int n) {
   return sys_sum_to_e(n);
 }
+static tid_t sys_thread_create(stub_fun sfun, pthread_fun pfun, void *arg) {
+  return pthread_execute(sfun, pfun, arg);
+}
+static void sys_pthread_exit(void) {
+  struct thread *t = thread_current();
+  pthread_exit();
+  if (is_main_thread(t, t->pcb)) {
+    if (t->tid == -1)
+      thread_exit();
+    t->pcb->exit_state = 0;
+    process_exit();
+  }
+  NOT_REACHED();
+}
+static struct lock *find_pthread_lock(struct list *list, lock_t *id) {
+  struct list_elem *e;
+  for (e = list_begin(list); e != list_end(list); e = list_next(e)) {
+    struct user_lock *ulock = list_entry(e, struct user_lock, elem);
+    if (ulock->id == *id)
+      return &ulock->lock;
+  }
+  return NULL;
+}
+static struct semaphore *find_pthread_sema(struct list *list, sema_t *id) {
+  struct list_elem *e;
+  for (e = list_begin(list); e != list_end(list); e = list_next(e)) {
+    struct user_sema *usema = list_entry(e, struct user_sema, elem);
+    if (usema->id == *id)
+      return &usema->sema;
+  }
+  return NULL;
+}
+static bool sys_lock_init(lock_t *lock) {
+  if (lock == NULL)
+    return false;
+  struct user_lock *ulock= malloc (sizeof (struct user_lock));
+  if (ulock == NULL)
+    return false;
+  lock_init(&ulock->lock);
+  struct process *pcb = thread_current()->pcb;
+  lock_acquire(&pcb->user_thread_lock);
+  lock_t id = list_entry(list_begin(&pcb->lock_list), struct user_lock, elem)->id;
+  ulock->id = id + 1;
+  list_push_front(&pcb->lock_list, &ulock->elem);
+  lock_release(&pcb->user_thread_lock);
+  *lock = ulock->id;
+  return true;
+}
+static tid_t sys_get_tid(void) {
+  return thread_current()->tid;
+}
+static bool sys_lock_acquire(lock_t *lock) {
+  bool success = false;
+  struct process *pcb = thread_current()->pcb;
+  lock_acquire(&pcb->user_thread_lock);
+  struct lock *klock = find_pthread_lock(&pcb->lock_list, lock);
+  lock_release(&pcb->user_thread_lock);
+  if (klock != NULL && !lock_held_by_current_thread(klock)) {
+    success = true;
+    lock_acquire(klock);
+  }
+  return success;
+}
+static bool sys_lock_release(lock_t *lock) {
+  bool success = false;
+  struct process *pcb = thread_current()->pcb;
+  lock_acquire(&pcb->user_thread_lock);
+  struct lock *klock = find_pthread_lock(&pcb->lock_list, lock);
+  lock_release(&pcb->user_thread_lock);
+  if (klock != NULL && lock_held_by_current_thread(klock)) {
+    lock_release(klock);
+    success = true;
+  }
+  return success;
+}
+static bool sys_sema_init(sema_t *sema, int val) {
+  if (sema == NULL || val < 0)
+    return false;
+  struct process *pcb = thread_current()->pcb;
+
+  struct user_sema *usema = malloc( sizeof (struct user_sema));
+  if (usema == NULL)
+    return false;
+
+  sema_init(&usema->sema, val);
+  lock_acquire(&pcb->user_thread_lock);
+  sema_t id = list_entry(list_begin(&pcb->sema_list), struct user_sema, elem)->id;
+  usema->id = id + 1;
+  list_push_front(&pcb->sema_list, &usema->elem);
+  lock_release(&pcb->user_thread_lock);
+  *sema = usema->id;
+  return true;
+}
+static bool sys_sema_down(sema_t *sema) {
+  struct process *pcb = thread_current()->pcb;
+  bool success = false;
+
+  lock_acquire(&pcb->user_thread_lock);
+  struct semaphore *ksema = find_pthread_sema(&pcb->sema_list, sema);
+  lock_release(&pcb->user_thread_lock);
+  if (ksema != NULL) {
+    success = true;
+    sema_down(ksema);
+  }
+
+  return success;
+}
+static bool sys_sema_up(sema_t *sema) {
+  struct process *pcb = thread_current()->pcb;
+  bool success = false;
+
+  lock_acquire(&pcb->user_thread_lock);
+  struct semaphore *ksema = find_pthread_sema(&pcb->sema_list, sema);
+  lock_release(&pcb->user_thread_lock);
+  if (ksema != NULL) {
+    sema_up(ksema);
+    success = true;
+  }
+
+  return success;
+}
 
 static void syscall_handler(struct intr_frame* f UNUSED) {
   uint32_t* args = ((uint32_t*)f->esp);
@@ -188,7 +309,7 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
    * include it in your final submission.
    */
 
-  /* printf("System call number: %d\n", args[0]); */
+  // printf("System call number: %d\n", args[0]);
   switch (args[0]) {
     case SYS_EXIT:
       if (!check_ptr((void *)&args[1], 1)) goto bad;
@@ -261,6 +382,47 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
       if (!check_ptr((void *)&args[1], 1)) goto bad;
       f->eax = args[1];
       f->eax = wait(args[1]);
+      return;
+    case SYS_LOCK_INIT:
+      if (!check_ptr((void *)&args[1], 1)) goto bad;
+      else f->eax = sys_lock_init((lock_t *)args[1]);
+      return;
+    case SYS_LOCK_ACQUIRE:
+      if (!check_ptr((void *)&args[1], 1)) goto bad;
+      else f->eax = sys_lock_acquire((lock_t *)args[1]);
+      return;
+    case SYS_LOCK_RELEASE:
+      if (!check_ptr((void *)&args[1], 1)) goto bad;
+      else f->eax = sys_lock_release((lock_t *)args[1]);
+      return;
+    case SYS_SEMA_INIT:
+      if (!check_ptr((void *)&args[1], 1)) goto bad;
+      else if (!check_ptr((void *)&args[2], 1)) goto bad;
+      else f->eax = sys_sema_init((sema_t *)args[1], (int)args[2]);
+      return;
+    case SYS_SEMA_DOWN:
+      if (!check_ptr((void *)&args[1], 1)) goto bad;
+      else f->eax = sys_sema_down((sema_t *)args[1]);
+      return;
+    case SYS_SEMA_UP:
+      if (!check_ptr((void *)&args[1], 1)) goto bad;
+      else f->eax = sys_sema_up((sema_t *)args[1]);
+      return;
+    case SYS_GET_TID:
+      f->eax = sys_get_tid();
+      return;
+    case SYS_PT_CREATE:
+      if (!check_ptr((void *)&args[3], 1)) f->eax = TID_ERROR;
+      else if (!check_ptr((void *)&args[2], 1)) f->eax = TID_ERROR;
+      else if (!check_ptr((void *)&args[1], 1)) f->eax = TID_ERROR;
+      else f->eax = sys_thread_create((stub_fun)args[1], (pthread_fun)args[2], (void *)args[3]);
+      return;
+    case SYS_PT_EXIT:
+      sys_pthread_exit();
+      return;
+    case SYS_PT_JOIN:
+      if (!check_ptr((void *)&args[1], 1)) goto bad;
+      f->eax = pthread_join((tid_t)args[1]);
       return;
   }
 bad:

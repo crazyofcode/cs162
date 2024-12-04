@@ -10,6 +10,8 @@
 
 /* Global coordinator state. */
 coordinator* state;
+GHashTable *ht;
+unsigned int job_id;
 
 extern void coordinator_1(struct svc_req*, SVCXPRT*);
 
@@ -40,6 +42,8 @@ int main(int argc, char** argv) {
   }
 
   coordinator_init(&state);
+  ht = g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL, NULL);
+  job_id = 0;
 
   svc_run();
   fprintf(stderr, "%s", "svc_run returned");
@@ -63,6 +67,12 @@ int* submit_job_1_svc(submit_job_request* argp, struct svc_req* rqstp) {
   printf("Received submit job request\n");
 
   /* TODO */
+  if (get_app(argp->files) == NULL)
+    result = -1;
+  else {
+    result = job_id++;
+    g_hash_table_insert(ht, GINT_TO_POINTER(5), argp);
+  }
 
   /* Do not modify the following code. */
   /* BEGIN */

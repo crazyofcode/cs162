@@ -192,8 +192,8 @@ tid_t thread_create(const char* name, int priority, thread_func* function, void*
 
   /* Initialize thread. */
   init_thread(t, name, priority);
+  t->pcb = thread_current()->pcb;
   tid = t->tid = allocate_tid();
-  // 记录父进程的 main thread
   t->parent = thread_current();
 
   /* Stack frame for kernel_thread(). */
