@@ -25,6 +25,8 @@
 
 typedef struct {
   /* TODO */
+  GHashTable *ht;
+  unsigned int job_id;
 } coordinator;
 
 void coordinator_init(coordinator** coord_ptr);
