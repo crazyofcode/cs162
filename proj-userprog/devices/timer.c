@@ -20,8 +20,6 @@
 /* Number of timer ticks since OS booted. */
 static int64_t ticks;
 
-static struct list sleep_thread;
-
 /* Number of loops per timer tick.
    Initialized by timer_calibrate(). */
 static unsigned loops_per_tick;
@@ -37,7 +35,6 @@ static void real_time_delay(int64_t num, int32_t denom);
 void timer_init(void) {
   pit_configure_channel(0, 2, TIMER_FREQ);
   intr_register_ext(0x20, timer_interrupt, "8254 Timer");
-  list_init(&sleep_thread);
 }
 
 /* Calibrates loops_per_tick, used to implement brief delays. */
@@ -79,38 +76,11 @@ int64_t timer_elapsed(int64_t then) { return timer_ticks() - then; }
 /* Sleeps for approximately TICKS timer ticks.  Interrupts must
    be turned on. */
 void timer_sleep(int64_t ticks) {
-  // int64_t start = timer_ticks();
+  int64_t start = timer_ticks();
 
   ASSERT(intr_get_level() == INTR_ON);
-  // while (timer_elapsed(start) < ticks)
-  //   thread_yield();
-  if (ticks <= 0)  return;
-
-  // block thread need to close interrupts
-  enum intr_level old_level = intr_disable();
-  // struct sleep_thread *t = malloc(sizeof(struct sleep_thread));
-  struct thread *cur = thread_current();
-  // t->t = cur;
-  // t->ticks = ticks;
-  cur->ticks = ticks;
-  list_push_back(&sleep_thread, &cur->sleep_elem);
-  thread_block();
-  // timer sleep need interrupts must be enabled
-  intr_set_level(old_level);
-}
-
-static void sleep_wakeup(void) {
-  struct list_elem *e;
-  for (e = list_begin(&sleep_thread); e != list_end(&sleep_thread); ) {
-    struct thread *t = list_entry(e, struct thread, sleep_elem);
-    --(t->ticks);
-    if (t->ticks == 0) {
-      thread_unblock(t);
-      e = list_remove(e);
-    } else {
-      e = list_next(e);
-    }
-  }
+  while (timer_elapsed(start) < ticks)
+    thread_yield();
 }
 
 /* Sleeps for approximately MS milliseconds.  Interrupts must be
@@ -159,7 +129,6 @@ void timer_print_stats(void) { printf("Timer: %" PRId64 " ticks\n", timer_ticks(
 static void timer_interrupt(struct intr_frame* args UNUSED) {
   ticks++;
   thread_tick();
-  sleep_wakeup();
 }
 
 /* Returns true if LOOPS iterations waits for more than one timer

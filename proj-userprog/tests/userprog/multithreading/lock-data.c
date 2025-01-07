@@ -32,9 +32,8 @@ void test_main(void) {
 
   // Spawn threads
   tid_t tids[NUM_THREADS];
-  for (int i = 0; i < NUM_THREADS; i++) {
+  for (int i = 0; i < NUM_THREADS; i++)
     tids[i] = pthread_check_create(thread_function, &best_class);
-  }
 
   // Wait on threads
   for (int i = 0; i < NUM_THREADS; i++)
