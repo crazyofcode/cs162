@@ -6,6 +6,7 @@
 #include "devices/block.h"
 
 struct bitmap;
+struct buf;
 
 void inode_init(void);
 bool inode_create(block_sector_t, off_t);
@@ -19,5 +20,9 @@ off_t inode_write_at(struct inode*, const void*, off_t size, off_t offset);
 void inode_deny_write(struct inode*);
 void inode_allow_write(struct inode*);
 off_t inode_length(const struct inode*);
+
+void  binit(void);
+struct buf *bread(struct block *, block_sector_t);
+void  bwrite(struct block *, block_sector_t, off_t, off_t, const uint8_t *);
 
 #endif /* filesys/inode.h */
