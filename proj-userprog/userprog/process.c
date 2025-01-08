@@ -44,6 +44,7 @@ void userprog_init(void) {
 
   sema_init(&t->pcb->sema_exec, 0);
   list_init(&t->pcb->child_list);
+  t->pcb->cwd = NULL;
   /* Kill the kernel if we did not succeed */
   ASSERT(success);
 }
@@ -101,6 +102,7 @@ static void start_process(void* file_name_) {
     t->pcb->exit_state = 0;
     t->pcb->pid = t->tid;
     t->pcb->fd = 2;
+    t->pcb->cwd = get_cwd_inode(t->parent->pcb->cwd);
     // t->pcb->entry = NULL;
     sema_init(&t->pcb->sema_exec, 0);
     list_init(&t->pcb->child_list);
@@ -178,7 +180,7 @@ static void start_process(void* file_name_) {
 
   // if (t->parent->pcb->child == NULL)  t->parent->pcb->child = malloc( sizeof(struct child_entry) );
   // 将该 process 的信息保存到 parent 的 child_list 中
-  if (t->parent != NULL) {
+  // if (t->parent != NULL) {
     // struct child_entry *entry = t->parent->pcb->child;
     struct child_entry *entry = malloc(sizeof (struct child_entry));
     entry->pid        = t->pcb->pid;
@@ -188,7 +190,7 @@ static void start_process(void* file_name_) {
     entry->exit_state = 0;
     sema_init(&entry->sema_wait, 0);
     list_push_back(&t->parent->pcb->child_list, &entry->elem);
-  }
+  // }
   t->parent->pcb->load_success = true;
   sema_up(&t->parent->pcb->sema_exec);
   /* Start the user process by simulating a return from an

@@ -4,6 +4,7 @@
 #include "threads/thread.h"
 #include <stdint.h>
 
+struct inode;
 // At most 8MB can be allocated to the stack
 // These defines will be used in Project 2: Multithreading
 #define MAX_STACK_PAGES (1 << 11)
@@ -51,6 +52,7 @@ struct process {
 	bool	load_success;
 	// optional
 	bool	killed;
+  struct inode *cwd;
 
 	// file
   int fd;

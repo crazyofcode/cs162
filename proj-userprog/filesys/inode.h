@@ -24,5 +24,6 @@ off_t inode_length(const struct inode*);
 void  binit(void);
 struct buf *bread(struct block *, block_sector_t);
 void  bwrite(struct block *, block_sector_t, off_t, off_t, const uint8_t *);
+void  bflush(void);
 
 #endif /* filesys/inode.h */

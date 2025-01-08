@@ -66,7 +66,6 @@ static struct list bcache_list;
 /* Initializes the inode module. */
 void inode_init(void) { 
   list_init(&open_inodes);
-  binit();
 }
 
 void binit(void) {
@@ -126,6 +125,18 @@ void bwrite(struct block *device, block_sector_t idx, off_t off, off_t length, c
   b = bread(device, idx);
   b->dirty = true;
   memcpy((void *)&b->data[off], data, length);
+}
+
+void bflush(void) {
+  struct buf *b = NULL;
+  struct list_elem *e;
+  for (e = list_begin(&bcache_list); e != list_end(&bcache_list); e = list_next(e)) {
+    b = list_entry(e, struct buf, elem);
+    if (b->dirty) {
+      b->dirty = false;
+      block_write(b->dev, b->blockno, b->data);
+    }
+  }
 }
 
 /* Initializes an inode with LENGTH bytes of data and

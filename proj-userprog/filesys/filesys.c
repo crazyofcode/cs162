@@ -12,6 +12,9 @@ struct block* fs_device;
 
 static void do_format(void);
 
+void filesys_binit(void) {
+  binit();
+}
 /* Initializes the file system module.
    If FORMAT is true, reformats the file system. */
 void filesys_init(bool format) {
@@ -37,6 +40,9 @@ void filesys_done(void) { free_map_close(); }
    Fails if a file named NAME already exists,
    or if internal memory allocation fails. */
 bool filesys_create(const char* name, off_t initial_size) {
+  if (name[0] == '\0')
+    return false;
+  printf("name: %s\n", name);
   block_sector_t inode_sector = 0;
   struct dir* dir = dir_open_root();
   bool success = (dir != NULL && free_map_allocate(1, &inode_sector) &&
@@ -74,6 +80,13 @@ bool filesys_remove(const char* name) {
   dir_close(dir);
 
   return success;
+}
+
+struct inode *get_cwd_inode(struct inode *base) {
+  if (base == NULL)
+    return dir_get_inode(dir_open_root());
+  else
+    return file_get_inode(file_open(base));
 }
 
 /* Formats the file system. */

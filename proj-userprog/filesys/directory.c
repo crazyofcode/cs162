@@ -65,27 +65,85 @@ struct inode* dir_get_inode(struct dir* dir) {
   return dir->inode;
 }
 
+/* Extracts a file name part from *SRCP into PART, and updates *SRCP so that the
+   next call will return the next file name part. Returns 1 if successful, 0 at
+   end of string, -1 for a too-long file name part. */
+static int get_next_part(char part[NAME_MAX + 1], const char** srcp) {
+  const char* src = *srcp;
+  char* dst = part;
+
+  memset(dst, 0, NAME_MAX+1);
+  /* Skip leading slashes.  If it's all slashes, we're done. */
+  while (*src == '/')
+    src++;
+  if (*src == '\0')
+    return 0;
+
+  /* Copy up to NAME_MAX character from SRC to DST.  Add null terminator. */
+  while (*src != '/' && *src != '\0') {
+    if (dst < part + NAME_MAX)
+      *dst++ = *src;
+    else
+      return -1;
+    src++;
+  }
+  *dst = '\0';
+
+  /* Advance source pointer. */
+  *srcp = src;
+  return 1;
+}
 /* Searches DIR for a file with the given NAME.
    If successful, returns true, sets *EP to the directory entry
    if EP is non-null, and sets *OFSP to the byte offset of the
    directory entry if OFSP is non-null.
    otherwise, returns false and ignores EP and OFSP. */
+static void helper(struct dir_entry* ep, struct dir_entry* e, off_t* ofsp, off_t ofs) {
+  if (ep != NULL)
+    *ep = *e;
+  if (ofsp != NULL)
+    *ofsp = ofs;
+}
 static bool lookup(const struct dir* dir, const char* name, struct dir_entry* ep, off_t* ofsp) {
   struct dir_entry e;
+  const struct dir *cdir;
+  const char *src;
+  char dst[NAME_MAX+1];
   size_t ofs;
+  bool flag;
 
   ASSERT(dir != NULL);
   ASSERT(name != NULL);
 
-  for (ofs = 0; inode_read_at(dir->inode, &e, sizeof e, ofs) == sizeof e; ofs += sizeof e)
-    if (e.in_use && !strcmp(name, e.name)) {
-      if (ep != NULL)
-        *ep = e;
-      if (ofsp != NULL)
-        *ofsp = ofs;
-      return true;
+  cdir = dir;
+  src = name;
+  int ret = get_next_part(dst, &src);
+  while(ret > 0) {
+    flag = false;
+    for (ofs = 0; inode_read_at(cdir->inode, &e, sizeof e, ofs) == sizeof e; ofs += sizeof e) {
+      if (strcmp(dst, ".") == 0) {
+        if (ret == 0) {
+          helper(ep, &e, ofsp, sizeof e);
+          return true;
+        }
+      } else if (strcmp(dst, "..") == 0) {
+        // 如果src的内容读取完毕就保存数据到e, ofsp
+        // 否则更新cdir为 e.inode_sector 处记录的 dir 信息
+        cdir = dir_open(inode_open(e.inode_sector));
+        flag = true;
+        break;
+      } else if (e.in_use && !strcmp(name, e.name)) {
+        // 如果src的内容读取完毕就保存数据到e, ofsp
+        // 否则更新cdir为 e.inode_sector 处记录的 dir 信息
+        flag = true;
+        break;
+      }
     }
-  return false;
+    if (!flag)
+      return false;
+    ret = get_next_part(dst, &src);
+  }
+  return true;
 }
 
 /* Searches DIR for a file with the given NAME
