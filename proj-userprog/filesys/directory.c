@@ -17,12 +17,42 @@ struct dir_entry {
   block_sector_t inode_sector; /* Sector number of header. */
   char name[NAME_MAX + 1];     /* Null terminated file name. */
   bool in_use;                 /* In use or free? */
+  bool is_dir;
 };
 
 /* Creates a directory with space for ENTRY_CNT entries in the
    given SECTOR.  Returns true if successful, false on failure. */
-bool dir_create(block_sector_t sector, size_t entry_cnt) {
-  return inode_create(sector, entry_cnt * sizeof(struct dir_entry));
+bool dir_create(struct dir *parent, block_sector_t sector, size_t entry_cnt) {
+  bool success;
+  success = inode_create(sector, entry_cnt * sizeof(struct dir_entry));
+
+  if (success) {
+    struct inode *new_inode =inode_open(sector);
+    struct dir_entry entry;
+    if (parent != NULL) {
+      entry.inode_sector = inode_get_inumber(parent->inode);
+      strlcpy(entry.name, "..", NAME_MAX+1);
+      entry.in_use = true;
+      entry.is_dir = true;
+
+      inode_write_at(new_inode, &entry, sizeof entry, 0);
+    } else {
+      entry.inode_sector = ENDING;
+      strlcpy(entry.name, "..", NAME_MAX+1);
+      entry.in_use = false;
+      entry.is_dir = true;
+
+      inode_write_at(new_inode, &entry, sizeof entry, 0);
+    }
+
+    entry.inode_sector = sector;
+    strlcpy(entry.name, ".", NAME_MAX+1);
+    entry.in_use = true;
+    entry.is_dir = true;
+
+    inode_write_at(new_inode, &entry, sizeof entry, sizeof entry);
+  }
+  return success;
 }
 
 /* Opens and returns the directory for the given INODE, of which
@@ -98,17 +128,12 @@ static int get_next_part(char part[NAME_MAX + 1], const char** srcp) {
    if EP is non-null, and sets *OFSP to the byte offset of the
    directory entry if OFSP is non-null.
    otherwise, returns false and ignores EP and OFSP. */
-static void helper(struct dir_entry* ep, struct dir_entry* e, off_t* ofsp, off_t ofs) {
-  if (ep != NULL)
-    *ep = *e;
-  if (ofsp != NULL)
-    *ofsp = ofs;
-}
 static bool lookup(const struct dir* dir, const char* name, struct dir_entry* ep, off_t* ofsp) {
   struct dir_entry e;
   const struct dir *cdir;
   const char *src;
   char dst[NAME_MAX+1];
+  char cdst[NAME_MAX+1];
   size_t ofs;
   bool flag;
 
@@ -118,31 +143,38 @@ static bool lookup(const struct dir* dir, const char* name, struct dir_entry* ep
   cdir = dir;
   src = name;
   int ret = get_next_part(dst, &src);
+  strlcpy(cdst, dst, strlen(dst)+1);
   while(ret > 0) {
     flag = false;
+    ret = get_next_part(dst, &src);
     for (ofs = 0; inode_read_at(cdir->inode, &e, sizeof e, ofs) == sizeof e; ofs += sizeof e) {
-      if (strcmp(dst, ".") == 0) {
-        if (ret == 0) {
-          helper(ep, &e, ofsp, sizeof e);
-          return true;
+      if (!e.in_use)  continue;
+      if (strcmp(cdst, ".") == 0) {
+        if (ret == 0) goto done;
+        else {
+          flag = true;
+          break;
         }
-      } else if (strcmp(dst, "..") == 0) {
-        // 如果src的内容读取完毕就保存数据到e, ofsp
-        // 否则更新cdir为 e.inode_sector 处记录的 dir 信息
-        cdir = dir_open(inode_open(e.inode_sector));
-        flag = true;
-        break;
-      } else if (e.in_use && !strcmp(name, e.name)) {
-        // 如果src的内容读取完毕就保存数据到e, ofsp
-        // 否则更新cdir为 e.inode_sector 处记录的 dir 信息
-        flag = true;
-        break;
+      } else if (strcmp(cdst, e.name) == 0) {
+        if (ret == 0) goto done;
+        else {
+          cdir = dir_open(inode_open(e.inode_sector));
+          if (cdir == NULL)   return false;
+          flag = true;
+          break;
+        }
       }
     }
     if (!flag)
       return false;
-    ret = get_next_part(dst, &src);
+    strlcpy(cdst, dst, strlen(dst)+1);
   }
+
+done: 
+  if (ep != NULL)
+    *ep = e;
+  if (ofsp != NULL)
+    *ofsp = ofs;
   return true;
 }
 
@@ -170,7 +202,7 @@ bool dir_lookup(const struct dir* dir, const char* name, struct inode** inode) {
    Returns true if successful, false on failure.
    Fails if NAME is invalid (i.e. too long) or a disk or memory
    error occurs. */
-bool dir_add(struct dir* dir, const char* name, block_sector_t inode_sector) {
+bool dir_add(struct dir* dir, const char* name, block_sector_t inode_sector, bool is_dir) {
   struct dir_entry e;
   off_t ofs;
   bool success = false;
@@ -197,8 +229,13 @@ bool dir_add(struct dir* dir, const char* name, block_sector_t inode_sector) {
     if (!e.in_use)
       break;
 
+  if (is_dir) {
+    success = dir_create(dir, inode_sector, 2);
+    if (!success) return success;
+  }
   /* Write slot. */
   e.in_use = true;
+  e.is_dir = is_dir;
   strlcpy(e.name, name, sizeof e.name);
   e.inode_sector = inode_sector;
   success = inode_write_at(dir->inode, &e, sizeof e, ofs) == sizeof e;

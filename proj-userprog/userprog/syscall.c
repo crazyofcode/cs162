@@ -22,7 +22,7 @@ static bool check_ptr(void *ptr, size_t size) {
   if (!is_user_vaddr(ptr))                  return false;
   if (!is_user_vaddr(ptr+size*argu_size))   return false;
   if (!pagedir_get_page(thread_current()->pcb->pagedir, ptr))  return false;
-  if (!pagedir_get_page(thread_current()->pcb->pagedir, ptr+size*argu_size))  return false;
+  if (!pagedir_get_page(thread_current()->pcb->pagedir, (void *)((char *)ptr+size*argu_size)))  return false;
   return true;
 }
 static bool check_str(void *ptr) {
@@ -92,7 +92,7 @@ static bool create(const char *file, unsigned initial_size) {
     exit(-1);
     return -1;
   }
-  return filesys_create(file, initial_size);
+  return filesys_create(file, initial_size, false);
 }
 static bool remove(const char *file) {
   return filesys_remove(file);
@@ -177,6 +177,38 @@ static pid_t exec(const char *cmd_line) {
 static int compute_e(int n) {
   return sys_sum_to_e(n);
 }
+static bool sys_chdir(const char *dir) {
+  if (dir[0] == '\0')
+    return false;
+  struct thread *cur = thread_current();
+  struct file *file = filesys_open(dir);
+  if (file == NULL)   return false;
+  cur->pcb->cwd = file_get_inode(file);
+  return true;
+}
+static bool sys_mkdir(const char *dir) {
+  if (dir[0] == '\0')
+    return false;
+  return filesys_create(dir, 0, true);
+}
+static bool sys_readdir(int fd, char *name) {
+  struct file_entry *entry = find(fd);
+  if (entry == NULL)  return -1;
+  lock_acquire(&thread_current()->pcb->file_lock);
+  bool ret = filesys_readdir(file_get_inode(entry->file), name);
+  lock_release(&thread_current()->pcb->file_lock);
+  return ret;
+}
+static bool sys_isdir(int fd) {
+  struct file_entry *entry = find(fd);
+  if (entry == NULL)  return -1;
+  return filesys_isdir(file_get_inode(entry->file));
+}
+static int sys_inumber(int fd) {
+  struct file_entry *entry = find(fd);
+  if (entry == NULL)  return -1;
+  return file_get_inumber(entry->file);
+}
 
 static void syscall_handler(struct intr_frame* f UNUSED) {
   uint32_t* args = ((uint32_t*)f->esp);
@@ -191,76 +223,88 @@ static void syscall_handler(struct intr_frame* f UNUSED) {
   /* printf("System call number: %d\n", args[0]); */
   switch (args[0]) {
     case SYS_EXIT:
-      if (!check_ptr((void *)&args[1], 1)) goto bad;
+      if (!check_ptr((void *)&args[1], 4)) goto bad;
       f->eax = args[1];
       exit(args[1]);
       return;
     case SYS_WRITE:
-      if (!check_ptr((void *)&args[1], 3)) goto bad;
+      if (!check_ptr((void *)&args[1], (size_t)args[3])) goto bad;
       f->eax = write(args[1], (void *)args[2], (unsigned)args[3]);
       return;
     case SYS_PRACTICE:
-      if (!check_ptr((void *)&args[1], 1)) goto bad;
-      f->eax = args[1];
+      if (!check_ptr((void *)&args[1], 4)) goto bad;
       f->eax = args[1] + 1;
       return;
     case SYS_HALT:
       halt();
       return;
     case SYS_EXEC:
-      if (!check_ptr((void *)&args[1], 1)) goto bad;
-      f->eax = args[1];
+      if (!check_str((void *)&args[1])) goto bad;
       f->eax = exec((char *)args[1]);
       return;
     case SYS_CREATE:
-      if (!check_ptr((void *)&args[1], 2)) goto bad;
-      f->eax = args[1];
+      if (!check_ptr((void *)&args[1], (size_t)args[2])) goto bad;
       f->eax = create((char *)args[1], (unsigned)args[2]);
       return;
     case SYS_REMOVE:
-      if (!check_ptr((void *)&args[1], 1)) goto bad;
-      f->eax = args[1];
+      if (!check_str((void *)&args[1])) goto bad;
       f->eax = remove((char *)args[1]);
       return;
     case SYS_OPEN:
-      if (!check_ptr((void *)&args[1], 1)) goto bad;
-      f->eax = args[1];
+      if (!check_str((void *)&args[1])) goto bad;
       f->eax = open((char *)args[1]);
       return;
     case SYS_FILESIZE:
-      if (!check_ptr((void *)&args[1], 1)) goto bad;
+      if (!check_ptr((void *)&args[1], 4)) goto bad;
       f->eax = args[1];
       f->eax = filesize((int)args[1]);
       return;
     case SYS_READ:
-      if (!check_ptr((void *)&args[1], 3)) goto bad;
-      f->eax = args[1];
+      if (!check_ptr((void *)&args[1], (size_t)args[3])) goto bad;
       f->eax = read(args[1], (void *)args[2], (unsigned)args[3]);
       return;
     case SYS_SEEK:
-      if (!check_ptr((void *)&args[1], 2)) goto bad;
+      if (!check_ptr((void *)&args[1], 4)) goto bad;
       f->eax = args[1];
       seek(args[1], (unsigned)args[2]);
       return;
     case SYS_TELL:
-      if (!check_ptr((void *)&args[1], 1)) goto bad;
+      if (!check_ptr((void *)&args[1], 4)) goto bad;
       f->eax = args[1];
       f->eax = tell(args[1]);
       return;
     case SYS_CLOSE:
-      if (!check_ptr((void *)&args[1], 1)) goto bad;
+      if (!check_ptr((void *)&args[1], 4)) goto bad;
       f->eax = args[1];
       close(args[1]);
       return;
     case SYS_COMPUTE_E:
-      if (!check_ptr((void *)&args[1], 1)) goto bad;
+      if (!check_ptr((void *)&args[1], 4)) goto bad;
       f->eax = args[1];
       f->eax = (int)compute_e(args[1]);
       return;
     case SYS_WAIT:
-      if (!check_ptr((void *)&args[1], 1)) goto bad;
+      if (!check_ptr((void *)&args[1], 4)) goto bad;
       f->eax = args[1];
       f->eax = wait(args[1]);
+      return;
+    case SYS_CHDIR:
+      if (!check_str((void *)&args[1])) goto bad;
+      f->eax = sys_chdir((const char *)args[1]);
+      return;
+    case SYS_MKDIR:
+      if (!check_str((void *)&args[1])) goto bad;
+      f->eax = sys_mkdir((const char *)args[1]);
+      return;
+    case SYS_ISDIR:
+      f->eax = sys_isdir(args[1]);
+      return;
+    case SYS_READDIR:
+      if (!check_ptr((void *)&args[2], 4)) goto bad;
+      f->eax = sys_readdir(args[1], (char *)args[2]);
+      return;
+    case SYS_INUMBER:
+      f->eax = sys_inumber(args[1]);
       return;
   }
 bad:

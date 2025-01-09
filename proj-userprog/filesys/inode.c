@@ -43,6 +43,7 @@ struct inode {
   int open_cnt;           /* Number of openers. */
   bool removed;           /* True if deleted, false otherwise. */
   int deny_write_cnt;     /* 0: writes ok, >0: deny writes. */
+  bool is_dir;
   struct inode_disk data; /* Inode content. */
 };
 
@@ -383,3 +384,7 @@ void inode_allow_write(struct inode* inode) {
 
 /* Returns the length, in bytes, of INODE's data. */
 off_t inode_length(const struct inode* inode) { return inode->data.length; }
+
+bool inode_isdir(struct inode *inode) {
+  return inode->is_dir;
+}

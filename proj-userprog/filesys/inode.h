@@ -5,6 +5,8 @@
 #include "filesys/off_t.h"
 #include "devices/block.h"
 
+#define ENDING  0xffffffff
+
 struct bitmap;
 struct buf;
 
@@ -26,4 +28,5 @@ struct buf *bread(struct block *, block_sector_t);
 void  bwrite(struct block *, block_sector_t, off_t, off_t, const uint8_t *);
 void  bflush(void);
 
+bool  inode_isdir(struct inode *);
 #endif /* filesys/inode.h */

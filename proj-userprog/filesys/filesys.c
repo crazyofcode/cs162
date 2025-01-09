@@ -35,18 +35,51 @@ void filesys_init(bool format) {
    to disk. */
 void filesys_done(void) { free_map_close(); }
 
+static bool parse_new_file_name(char *src, char *dst) {
+  size_t length = strlen(src);
+  size_t cnt = 0;
+  char *p = src + length - 1;
+  while (*p != '/') {
+    ++cnt;
+    --p;
+  }
+  if (cnt > NAME_MAX)
+    return false;
+  strlcpy(dst, p, cnt+1);
+  memset(p+1, 0, cnt);
+  return true;
+}
 /* Creates a file named NAME with the given INITIAL_SIZE.
    Returns true if successful, false otherwise.
    Fails if a file named NAME already exists,
    or if internal memory allocation fails. */
-bool filesys_create(const char* name, off_t initial_size) {
+bool filesys_create(const char* name, off_t initial_size, bool is_dir) {
+  struct dir *base_dir;
+  struct dir *dir;
+  struct inode *base = thread_current()->pcb->cwd;
+  struct inode *inode;
+  char fname[NAME_MAX+1];
+  block_sector_t inode_sector = 0;
+  bool success = true;
+
   if (name[0] == '\0')
     return false;
-  printf("name: %s\n", name);
-  block_sector_t inode_sector = 0;
-  struct dir* dir = dir_open_root();
-  bool success = (dir != NULL && free_map_allocate(1, &inode_sector) &&
-                  inode_create(inode_sector, initial_size) && dir_add(dir, name, inode_sector));
+
+  if (name[0] == '/' || base == NULL)
+    base_dir = dir_open_root();
+  else
+    base_dir = dir_open(base);
+
+  success = parse_new_file_name((char *)name, fname);
+  if (base_dir)
+    dir_lookup(base_dir, name, &inode);
+  dir_close(base_dir);
+  dir = dir_open(inode);
+
+  if (success) {
+    success = (dir != NULL && free_map_allocate(1, &inode_sector) &&
+                  inode_create(inode_sector, initial_size) && dir_add(dir, fname, inode_sector, is_dir));
+  }
   if (!success && inode_sector != 0)
     free_map_release(inode_sector, 1);
   dir_close(dir);
@@ -60,12 +93,16 @@ bool filesys_create(const char* name, off_t initial_size) {
    Fails if no file named NAME exists,
    or if an internal memory allocation fails. */
 struct file* filesys_open(const char* name) {
-  struct dir* dir = dir_open_root();
-  struct inode* inode = NULL;
-
-  if (dir != NULL)
-    dir_lookup(dir, name, &inode);
-  dir_close(dir);
+  struct dir *base_dir;
+  struct inode *base = thread_current()->pcb->cwd;
+  struct inode* inode;
+  if (name[0] == '/' || base == NULL)
+    base_dir = dir_open_root();
+  else
+    base_dir = dir_open(base);
+  if (base_dir)
+    dir_lookup(base_dir, name, &inode);
+  dir_close(base_dir);
 
   return file_open(inode);
 }
@@ -89,11 +126,21 @@ struct inode *get_cwd_inode(struct inode *base) {
     return file_get_inode(file_open(base));
 }
 
+bool filesys_readdir(struct inode *inode, char *dst) {
+  struct dir *dir = dir_open(inode);
+  if (dir == NULL)  return false;
+  return dir_readdir(dir, dst);
+}
+
+bool filesys_isdir(struct inode *inode) {
+  return inode_isdir(inode);
+}
+
 /* Formats the file system. */
 static void do_format(void) {
   printf("Formatting file system...");
   free_map_create();
-  if (!dir_create(ROOT_DIR_SECTOR, 16))
+  if (!dir_create(NULL, ROOT_DIR_SECTOR, 16))
     PANIC("root directory creation failed");
   free_map_close();
   printf("done.\n");
