@@ -383,8 +383,30 @@ void inode_allow_write(struct inode* inode) {
 }
 
 /* Returns the length, in bytes, of INODE's data. */
-off_t inode_length(const struct inode* inode) { return inode->data.length; }
+off_t inode_length(const struct inode* inode) { 
+  struct inode_disk data;
+  struct buf *b = bread(fs_device, inode->sector);
+  data = *(struct inode_disk *)b->data;
+  b->cnt--;
+  return data.length;
+}
 
 bool inode_isdir(struct inode *inode) {
   return inode->is_dir;
+}
+
+bool inode_resize(struct inode *inode, off_t addsz) {
+  off_t sz = inode_length(inode);
+  off_t newsz = sz + addsz;
+  if (newsz < BLOCK_SECTOR_SIZE) {
+    inode->data.length = newsz;
+    bwrite(fs_device, inode->sector, 0, BLOCK_SECTOR_SIZE, (uint8_t *)&inode->data);
+    return true;
+  }
+  // TODO
+  return false;
+}
+
+void inode_set_dir(struct inode *inode, bool is_dir) {
+  inode->is_dir = is_dir;
 }

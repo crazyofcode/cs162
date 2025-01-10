@@ -28,5 +28,7 @@ struct buf *bread(struct block *, block_sector_t);
 void  bwrite(struct block *, block_sector_t, off_t, off_t, const uint8_t *);
 void  bflush(void);
 
+bool inode_resize(struct inode *, off_t);
 bool  inode_isdir(struct inode *);
+void inode_set_dir(struct inode *, bool);
 #endif /* filesys/inode.h */

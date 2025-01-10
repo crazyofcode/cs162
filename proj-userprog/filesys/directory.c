@@ -39,7 +39,7 @@ bool dir_create(struct dir *parent, block_sector_t sector, size_t entry_cnt) {
     } else {
       entry.inode_sector = ENDING;
       strlcpy(entry.name, "..", NAME_MAX+1);
-      entry.in_use = false;
+      entry.in_use = true;
       entry.is_dir = true;
 
       inode_write_at(new_inode, &entry, sizeof entry, 0);
@@ -188,9 +188,10 @@ bool dir_lookup(const struct dir* dir, const char* name, struct inode** inode) {
   ASSERT(dir != NULL);
   ASSERT(name != NULL);
 
-  if (lookup(dir, name, &e, NULL))
+  if (lookup(dir, name, &e, NULL)) {
     *inode = inode_open(e.inode_sector);
-  else
+    inode_set_dir(*inode, e.is_dir);
+  } else
     *inode = NULL;
 
   return *inode != NULL;
@@ -202,6 +203,7 @@ bool dir_lookup(const struct dir* dir, const char* name, struct inode** inode) {
    Returns true if successful, false on failure.
    Fails if NAME is invalid (i.e. too long) or a disk or memory
    error occurs. */
+#define DEFAULT_ADD_ENTRY 10
 bool dir_add(struct dir* dir, const char* name, block_sector_t inode_sector, bool is_dir) {
   struct dir_entry e;
   off_t ofs;
@@ -238,7 +240,13 @@ bool dir_add(struct dir* dir, const char* name, block_sector_t inode_sector, boo
   e.is_dir = is_dir;
   strlcpy(e.name, name, sizeof e.name);
   e.inode_sector = inode_sector;
-  success = inode_write_at(dir->inode, &e, sizeof e, ofs) == sizeof e;
+  off_t ret = inode_write_at(dir->inode, &e, sizeof e, ofs);
+  if (ret == 0) {
+    inode_resize(dir->inode, sizeof e * DEFAULT_ADD_ENTRY);
+    ret = inode_write_at(dir->inode, &e, sizeof e, ofs);
+  }
+  success = ret == sizeof e;
+
 
 done:
   return success;

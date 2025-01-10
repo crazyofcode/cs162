@@ -33,20 +33,23 @@ void filesys_init(bool format) {
 
 /* Shuts down the file system module, writing any unwritten data
    to disk. */
-void filesys_done(void) { free_map_close(); }
+void filesys_done(void) { 
+  bflush();
+  free_map_close();
+}
 
 static bool parse_new_file_name(char *src, char *dst) {
   size_t length = strlen(src);
   size_t cnt = 0;
   char *p = src + length - 1;
-  while (*p != '/') {
+  while (*p != '/' && p >= src) {
     ++cnt;
     --p;
   }
   if (cnt > NAME_MAX)
     return false;
-  strlcpy(dst, p, cnt+1);
-  memset(p+1, 0, cnt);
+  strlcpy(dst, p+1, cnt+1);
+  *(p + 1) = '\0';
   return true;
 }
 /* Creates a file named NAME with the given INITIAL_SIZE.
@@ -59,6 +62,7 @@ bool filesys_create(const char* name, off_t initial_size, bool is_dir) {
   struct inode *base = thread_current()->pcb->cwd;
   struct inode *inode;
   char fname[NAME_MAX+1];
+  char tmp_name[strlen(name) + 1];
   block_sector_t inode_sector = 0;
   bool success = true;
 
@@ -70,11 +74,18 @@ bool filesys_create(const char* name, off_t initial_size, bool is_dir) {
   else
     base_dir = dir_open(base);
 
-  success = parse_new_file_name((char *)name, fname);
-  if (base_dir)
-    dir_lookup(base_dir, name, &inode);
-  dir_close(base_dir);
-  dir = dir_open(inode);
+  strlcpy(tmp_name, name, strlen(name)+1);
+  success = parse_new_file_name(tmp_name, fname);
+  if (!success) return success;
+
+  if (!base_dir)
+    return false;
+  if (strlen(tmp_name) > 0) {
+    dir_lookup(base_dir, tmp_name, &inode);
+    dir = dir_open(inode);
+    dir_close(base_dir);
+  } else
+    dir = dir_reopen(base_dir);
 
   if (success) {
     success = (dir != NULL && free_map_allocate(1, &inode_sector) &&
@@ -96,13 +107,20 @@ struct file* filesys_open(const char* name) {
   struct dir *base_dir;
   struct inode *base = thread_current()->pcb->cwd;
   struct inode* inode;
-  if (name[0] == '/' || base == NULL)
+  bool is_cwd = true;
+
+  if (strlen(name) <= 0)
+    return NULL;
+  if (name[0] == '/' || base == NULL) {
     base_dir = dir_open_root();
+    is_cwd = false;
+  }
   else
     base_dir = dir_open(base);
   if (base_dir)
     dir_lookup(base_dir, name, &inode);
-  dir_close(base_dir);
+  if (!is_cwd)
+    dir_close(base_dir);
 
   return file_open(inode);
 }
@@ -140,7 +158,7 @@ bool filesys_isdir(struct inode *inode) {
 static void do_format(void) {
   printf("Formatting file system...");
   free_map_create();
-  if (!dir_create(NULL, ROOT_DIR_SECTOR, 16))
+  if (!dir_create(NULL,ROOT_DIR_SECTOR, 16))
     PANIC("root directory creation failed");
   free_map_close();
   printf("done.\n");
