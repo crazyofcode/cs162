@@ -4,6 +4,7 @@
 #include "threads/thread.h"
 #include <stdint.h>
 
+struct dir;
 struct inode;
 // At most 8MB can be allocated to the stack
 // These defines will be used in Project 2: Multithreading
@@ -52,7 +53,7 @@ struct process {
 	bool	load_success;
 	// optional
 	bool	killed;
-  struct inode *cwd;
+  struct dir *cwd;
 
 	// file
   int fd;

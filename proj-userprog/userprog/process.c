@@ -102,7 +102,7 @@ static void start_process(void* file_name_) {
     t->pcb->exit_state = 0;
     t->pcb->pid = t->tid;
     t->pcb->fd = 2;
-    t->pcb->cwd = get_cwd_inode(t->parent->pcb->cwd);
+    t->pcb->cwd = get_cwd_dir(t->parent->pcb->cwd);
     // t->pcb->entry = NULL;
     sema_init(&t->pcb->sema_exec, 0);
     list_init(&t->pcb->child_list);
@@ -289,6 +289,8 @@ void process_exit(void) {
 
   file_allow_write(cur->pcb->exec_file);
   file_close(cur->pcb->exec_file);
+
+  dir_close(cur->pcb->cwd);
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = cur->pcb->pagedir;

@@ -31,4 +31,5 @@ void  bflush(void);
 bool inode_resize(struct inode *, off_t);
 bool  inode_isdir(struct inode *);
 void inode_set_dir(struct inode *, bool);
+bool is_open_inode(block_sector_t);
 #endif /* filesys/inode.h */

@@ -404,9 +404,26 @@ bool inode_resize(struct inode *inode, off_t addsz) {
     return true;
   }
   // TODO
+  // 已经分配的 sector 实际可容纳的大小
+  // 如果 sector_array 中的每一个表示的是一组 inode 节点
+  // 
+  // off_t alloc_size = ROUND_UP(sz, BLOCK_SECTOR_SIZE);
+  // size_t sectors = bytes_to_sectors(newsz - alloc_size)  
+
   return false;
 }
 
 void inode_set_dir(struct inode *inode, bool is_dir) {
   inode->is_dir = is_dir;
+}
+
+bool is_open_inode(block_sector_t sector) { struct list_elem *e;
+  struct inode *inode;
+  for (e = list_begin(&open_inodes); e != list_end(&open_inodes); e = list_next(e)) {
+    inode = list_entry(e, struct inode, elem);
+    if (inode->sector == sector)
+      return true;
+  }
+
+  return false;
 }

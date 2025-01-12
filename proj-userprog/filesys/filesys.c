@@ -59,7 +59,7 @@ static bool parse_new_file_name(char *src, char *dst) {
 bool filesys_create(const char* name, off_t initial_size, bool is_dir) {
   struct dir *base_dir;
   struct dir *dir;
-  struct inode *base = thread_current()->pcb->cwd;
+  struct dir *base = thread_current()->pcb->cwd;
   struct inode *inode;
   char fname[NAME_MAX+1];
   char tmp_name[strlen(name) + 1];
@@ -72,7 +72,7 @@ bool filesys_create(const char* name, off_t initial_size, bool is_dir) {
   if (name[0] == '/' || base == NULL)
     base_dir = dir_open_root();
   else
-    base_dir = dir_open(base);
+    base_dir = dir_reopen(base);
 
   strlcpy(tmp_name, name, strlen(name)+1);
   success = parse_new_file_name(tmp_name, fname);
@@ -80,10 +80,9 @@ bool filesys_create(const char* name, off_t initial_size, bool is_dir) {
 
   if (!base_dir)
     return false;
-  if (strlen(tmp_name) > 0) {
+  if (strlen(tmp_name) > 0 && strcmp(tmp_name, "/")) {
     dir_lookup(base_dir, tmp_name, &inode);
     dir = dir_open(inode);
-    dir_close(base_dir);
   } else
     dir = dir_reopen(base_dir);
 
@@ -94,6 +93,7 @@ bool filesys_create(const char* name, off_t initial_size, bool is_dir) {
   if (!success && inode_sector != 0)
     free_map_release(inode_sector, 1);
   dir_close(dir);
+  dir_close(base_dir);
 
   return success;
 }
@@ -105,22 +105,25 @@ bool filesys_create(const char* name, off_t initial_size, bool is_dir) {
    or if an internal memory allocation fails. */
 struct file* filesys_open(const char* name) {
   struct dir *base_dir;
-  struct inode *base = thread_current()->pcb->cwd;
+  struct dir *base = thread_current()->pcb->cwd;
   struct inode* inode;
-  bool is_cwd = true;
 
   if (strlen(name) <= 0)
     return NULL;
-  if (name[0] == '/' || base == NULL) {
+  if (strcmp(name, "/") == 0) {
     base_dir = dir_open_root();
-    is_cwd = false;
+    inode = dir_get_inode(base_dir);
+    struct file *file = file_open(inode);
+    dir_close(base_dir);
+    return file;
   }
+  if (name[0] == '/' || base == NULL)
+    base_dir = dir_open_root();
   else
-    base_dir = dir_open(base);
+    base_dir = dir_reopen(base);
   if (base_dir)
     dir_lookup(base_dir, name, &inode);
-  if (!is_cwd)
-    dir_close(base_dir);
+  dir_close(base_dir);
 
   return file_open(inode);
 }
@@ -130,18 +133,32 @@ struct file* filesys_open(const char* name) {
    Fails if no file named NAME exists,
    or if an internal memory allocation fails. */
 bool filesys_remove(const char* name) {
-  struct dir* dir = dir_open_root();
-  bool success = dir != NULL && dir_remove(dir, name);
-  dir_close(dir);
+  struct dir *base_dir;
+  struct dir *base = thread_current()->pcb->cwd;
+  struct dir *root = dir_open_root();
+  bool success = true;
+
+  if (name[0] == '\0')
+    return false;
+
+  if (name[0] == '/' || base == NULL)
+    base_dir = root;
+  else
+    base_dir = dir_reopen(base);
+
+  if (!base_dir)  return false;
+
+  success = dir_remove(base_dir, name, base);
+  dir_close(base_dir);
 
   return success;
 }
 
-struct inode *get_cwd_inode(struct inode *base) {
+struct dir *get_cwd_dir(struct dir *base) {
   if (base == NULL)
-    return dir_get_inode(dir_open_root());
+    return dir_open_root();
   else
-    return file_get_inode(file_open(base));
+    return dir_reopen(base);
 }
 
 bool filesys_readdir(struct inode *inode, char *dst) {

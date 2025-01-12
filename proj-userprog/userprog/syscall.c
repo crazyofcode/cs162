@@ -11,6 +11,7 @@
 #include "devices/input.h"
 #include "filesys/filesys.h"
 #include "filesys/file.h"
+#include "filesys/directory.h"
 #include "threads/malloc.h"
 #include "threads/vaddr.h"
 
@@ -95,6 +96,8 @@ static bool create(const char *file, unsigned initial_size) {
   return filesys_create(file, initial_size, false);
 }
 static bool remove(const char *file) {
+  if (strcmp(file, "/") == 0)
+    return false;
   return filesys_remove(file);
 }
 static int open(const char *file) {
@@ -177,13 +180,21 @@ static pid_t exec(const char *cmd_line) {
 static int compute_e(int n) {
   return sys_sum_to_e(n);
 }
-static bool sys_chdir(const char *dir) {
-  if (dir[0] == '\0')
+static bool sys_chdir(const char *name) {
+  if (name[0] == '\0')
     return false;
-  struct thread *cur = thread_current();
-  struct file *file = filesys_open(dir);
-  if (file == NULL)   return false;
-  cur->pcb->cwd = file_get_inode(file);
+  struct dir *base = thread_current()->pcb->cwd;
+  if (name[0] == '/' || base == NULL)
+    base = dir_open_root();
+  struct inode *inode;
+  if (strcmp(name, "/") == 0)
+    thread_current()->pcb->cwd = dir_reopen(base);
+  else {
+    if (!dir_lookup(base, name, &inode))
+      return false;
+    thread_current()->pcb->cwd = dir_open(inode);
+    dir_close(base);
+  }
   return true;
 }
 static bool sys_mkdir(const char *dir) {

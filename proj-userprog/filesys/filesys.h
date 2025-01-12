@@ -13,7 +13,7 @@
 /* Block device that contains the file system. */
 extern struct block* fs_device;
 
-struct inode *get_cwd_inode(struct inode *);
+struct dir *get_cwd_dir(struct dir *);
 void filesys_binit(void);
 void filesys_init(bool format);
 void filesys_done(void);

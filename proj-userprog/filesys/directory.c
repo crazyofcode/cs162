@@ -51,6 +51,8 @@ bool dir_create(struct dir *parent, block_sector_t sector, size_t entry_cnt) {
     entry.is_dir = true;
 
     inode_write_at(new_inode, &entry, sizeof entry, sizeof entry);
+
+    inode_close(new_inode);
   }
   return success;
 }
@@ -149,19 +151,18 @@ static bool lookup(const struct dir* dir, const char* name, struct dir_entry* ep
     ret = get_next_part(dst, &src);
     for (ofs = 0; inode_read_at(cdir->inode, &e, sizeof e, ofs) == sizeof e; ofs += sizeof e) {
       if (!e.in_use)  continue;
-      if (strcmp(cdst, ".") == 0) {
+      if (strcmp(cdst, e.name) == 0) {
         if (ret == 0) goto done;
         else {
-          flag = true;
-          break;
-        }
-      } else if (strcmp(cdst, e.name) == 0) {
-        if (ret == 0) goto done;
-        else {
-          cdir = dir_open(inode_open(e.inode_sector));
-          if (cdir == NULL)   return false;
-          flag = true;
-          break;
+          if (strcmp(cdst, ".") == 0) {
+            flag = true;
+            break;
+          } else {
+            cdir = dir_open(inode_open(e.inode_sector));
+            if (cdir == NULL)   return false;
+            flag = true;
+            break;
+          }
         }
       }
     }
@@ -176,6 +177,22 @@ done:
   if (ofsp != NULL)
     *ofsp = ofs;
   return true;
+}
+
+static bool is_cwd_parent(struct dir *cwd, block_sector_t sector) {
+  struct dir_entry e;
+  struct inode *inode = inode_reopen(cwd->inode);
+  while (true) {
+    ASSERT(inode_read_at(inode, &e, sizeof e, 0) == sizeof e);
+    if (e.inode_sector == sector)
+      return true;
+    inode_close(inode);
+    if (e.inode_sector == ENDING)
+      break;
+    inode = inode_open(e.inode_sector);
+  }
+
+  return false;
 }
 
 /* Searches DIR for a file with the given NAME
@@ -255,17 +272,31 @@ done:
 /* Removes any entry for NAME in DIR.
    Returns true if successful, false on failure,
    which occurs only if there is no file with the given NAME. */
-bool dir_remove(struct dir* dir, const char* name) {
+bool dir_remove(struct dir* dir, const char* name, struct dir *cwd) {
   struct dir_entry e;
   struct inode* inode = NULL;
   bool success = false;
   off_t ofs;
+  struct dir *root = dir_open_root();
 
   ASSERT(dir != NULL);
   ASSERT(name != NULL);
 
   /* Find directory entry. */
   if (!lookup(dir, name, &e, &ofs))
+    goto done;
+
+  if (e.inode_sector == inode_get_inumber(dir->inode))
+    goto done;
+
+  if (e.inode_sector == inode_get_inumber(root->inode))
+    goto done;
+
+  /* 检查是否处于 open 状态 */
+  if (e.is_dir && is_open_inode(e.inode_sector))
+    goto done;
+
+  if (is_cwd_parent(cwd, e.inode_sector))
     goto done;
 
   /* Open inode. */
@@ -296,6 +327,10 @@ bool dir_readdir(struct dir* dir, char name[NAME_MAX + 1]) {
   while (inode_read_at(dir->inode, &e, sizeof e, dir->pos) == sizeof e) {
     dir->pos += sizeof e;
     if (e.in_use) {
+      if (strcmp(e.name, "..") == 0)
+        continue;
+      if (strcmp(e.name, ".") == 0)
+        continue;
       strlcpy(name, e.name, NAME_MAX + 1);
       return true;
     }
