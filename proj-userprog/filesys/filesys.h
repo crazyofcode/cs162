@@ -18,9 +18,9 @@ void filesys_binit(void);
 void filesys_init(bool format);
 void filesys_done(void);
 bool filesys_create(const char* name, off_t initial_size, bool);
-struct file* filesys_open(const char* name);
+void * filesys_open(const char* name, bool *is_dir_entry);
 bool filesys_remove(const char* name);
 
-bool filesys_readdir(struct inode *, char *);
+bool filesys_readdir(void *, char *);
 bool filesys_isdir(struct inode *);
 #endif /* filesys/filesys.h */

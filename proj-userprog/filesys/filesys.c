@@ -103,7 +103,7 @@ bool filesys_create(const char* name, off_t initial_size, bool is_dir) {
    otherwise.
    Fails if no file named NAME exists,
    or if an internal memory allocation fails. */
-struct file* filesys_open(const char* name) {
+void* filesys_open(const char* name, bool *is_dir_entry) {
   struct dir *base_dir;
   struct dir *base = thread_current()->pcb->cwd;
   struct inode* inode;
@@ -125,7 +125,15 @@ struct file* filesys_open(const char* name) {
     dir_lookup(base_dir, name, &inode);
   dir_close(base_dir);
 
-  return file_open(inode);
+  if (inode == NULL)
+    return NULL;
+  bool is_dir = inode_isdir(inode);
+  if (is_dir_entry != NULL)
+    *is_dir_entry = is_dir;
+  if (is_dir)
+    return (void *)dir_open(inode);
+  else
+    return (void *)file_open(inode);
 }
 
 /* Deletes the file named NAME.
@@ -136,6 +144,9 @@ bool filesys_remove(const char* name) {
   struct dir *base_dir;
   struct dir *base = thread_current()->pcb->cwd;
   struct dir *root = dir_open_root();
+  char fname[NAME_MAX+1];
+  char tmp_name[strlen(name) + 1];
+  struct inode *inode;
   bool success = true;
 
   if (name[0] == '\0')
@@ -148,7 +159,16 @@ bool filesys_remove(const char* name) {
 
   if (!base_dir)  return false;
 
-  success = dir_remove(base_dir, name, base);
+  strlcpy(tmp_name, name, strlen(name)+1);
+  success = parse_new_file_name(tmp_name, fname);
+  if (success && strlen(tmp_name) > 0 && strcmp(tmp_name, "/")) {
+    success = dir_lookup(base_dir, tmp_name, &inode);
+    dir_close(base_dir);
+    base_dir = dir_open(inode);
+  }
+
+  if (success)
+    success = dir_remove(base_dir, fname, base);
   dir_close(base_dir);
 
   return success;
@@ -161,10 +181,9 @@ struct dir *get_cwd_dir(struct dir *base) {
     return dir_reopen(base);
 }
 
-bool filesys_readdir(struct inode *inode, char *dst) {
-  struct dir *dir = dir_open(inode);
+bool filesys_readdir(void *dir, char *dst) {
   if (dir == NULL)  return false;
-  return dir_readdir(dir, dst);
+  return dir_readdir((struct dir *)dir, dst);
 }
 
 bool filesys_isdir(struct inode *inode) {

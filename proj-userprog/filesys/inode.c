@@ -238,7 +238,8 @@ void inode_close(struct inode* inode) {
     /* Deallocate blocks if removed. */
     if (inode->removed) {
       free_map_release(inode->sector, 1);
-      free_map_release(inode->data.start, bytes_to_sectors(inode->data.length));
+      size_t sectors = bytes_to_sectors(inode->data.length);
+      free_map_release(inode->data.start, sectors);
     }
 
     free(inode);
@@ -397,6 +398,13 @@ bool inode_isdir(struct inode *inode) {
 
 bool inode_resize(struct inode *inode, off_t addsz) {
   off_t sz = inode_length(inode);
+  if (sz == 0) {
+    size_t sectors = bytes_to_sectors(addsz);
+    free_map_allocate(sectors, &(inode->data.start));
+    inode->data.length = addsz;
+    bwrite(fs_device, inode->sector, 0, BLOCK_SECTOR_SIZE, (uint8_t *)&inode->data);
+    return true;
+  }
   off_t newsz = sz + addsz;
   if (newsz < BLOCK_SECTOR_SIZE) {
     inode->data.length = newsz;

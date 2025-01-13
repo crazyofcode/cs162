@@ -132,7 +132,7 @@ static int get_next_part(char part[NAME_MAX + 1], const char** srcp) {
    otherwise, returns false and ignores EP and OFSP. */
 static bool lookup(const struct dir* dir, const char* name, struct dir_entry* ep, off_t* ofsp) {
   struct dir_entry e;
-  const struct dir *cdir;
+  struct dir *cdir;
   const char *src;
   char dst[NAME_MAX+1];
   char cdst[NAME_MAX+1];
@@ -142,7 +142,7 @@ static bool lookup(const struct dir* dir, const char* name, struct dir_entry* ep
   ASSERT(dir != NULL);
   ASSERT(name != NULL);
 
-  cdir = dir;
+  cdir = dir_reopen((struct dir *)dir);
   src = name;
   int ret = get_next_part(dst, &src);
   strlcpy(cdst, dst, strlen(dst)+1);
@@ -152,12 +152,15 @@ static bool lookup(const struct dir* dir, const char* name, struct dir_entry* ep
     for (ofs = 0; inode_read_at(cdir->inode, &e, sizeof e, ofs) == sizeof e; ofs += sizeof e) {
       if (!e.in_use)  continue;
       if (strcmp(cdst, e.name) == 0) {
-        if (ret == 0) goto done;
-        else {
+        if (ret == 0) {
+          dir_close(cdir);
+          goto done;
+        } else {
           if (strcmp(cdst, ".") == 0) {
             flag = true;
             break;
           } else {
+            dir_close(cdir);
             cdir = dir_open(inode_open(e.inode_sector));
             if (cdir == NULL)   return false;
             flag = true;
@@ -166,8 +169,10 @@ static bool lookup(const struct dir* dir, const char* name, struct dir_entry* ep
         }
       }
     }
-    if (!flag)
+    if (!flag) {
+      dir_close(cdir);
       return false;
+    }
     strlcpy(cdst, dst, strlen(dst)+1);
   }
 
@@ -296,7 +301,7 @@ bool dir_remove(struct dir* dir, const char* name, struct dir *cwd) {
   if (e.is_dir && is_open_inode(e.inode_sector))
     goto done;
 
-  if (is_cwd_parent(cwd, e.inode_sector))
+  if (e.is_dir && is_cwd_parent(cwd, e.inode_sector))
     goto done;
 
   /* Open inode. */

@@ -78,7 +78,7 @@ static int write(int fd, void *buffer, unsigned size) {
   } else {
     struct file_entry *entry = find(fd);
     if (entry == NULL)  return -1;
-    if (filesys_isdir(file_get_inode(entry->file))) return -1;
+    if (entry->is_dir)  return -1;
     lock_acquire(&thread_current()->pcb->file_lock);
     int32_t ret = file_write(entry->file, buffer, size);
     lock_release(&thread_current()->pcb->file_lock);
@@ -108,12 +108,14 @@ static int open(const char *file) {
   }
   struct thread* t = thread_current();
   lock_acquire(&t->pcb->file_lock);
-  struct file *f = filesys_open(file);
+  bool is_dir;
+  void *f = filesys_open(file, &is_dir);
   lock_release(&t->pcb->file_lock);
   if (f == NULL) return -1;
   struct file_entry *entry = malloc(sizeof(struct file_entry));
   entry->file = f;
   entry->fd = t->pcb->fd++;
+  entry->is_dir = is_dir;
   list_push_back(&t->pcb->file, &entry->elem);
 
   return entry->fd;
@@ -165,7 +167,10 @@ static void close(int fd) {
   struct file_entry *entry = find(fd);
   if (entry == NULL)  return;
   lock_acquire(&thread_current()->pcb->file_lock);
-  file_close(entry->file);
+  if (entry->is_dir)
+    dir_close(entry->file);
+  else
+    file_close(entry->file);
   lock_release(&thread_current()->pcb->file_lock);
   list_remove(&entry->elem);
   free(entry);
@@ -204,9 +209,10 @@ static bool sys_mkdir(const char *dir) {
 }
 static bool sys_readdir(int fd, char *name) {
   struct file_entry *entry = find(fd);
-  if (entry == NULL)  return -1;
+  if (entry == NULL)  return false;
+  if (!entry->is_dir) return false;
   lock_acquire(&thread_current()->pcb->file_lock);
-  bool ret = filesys_readdir(file_get_inode(entry->file), name);
+  bool ret = filesys_readdir(entry->file, name);
   lock_release(&thread_current()->pcb->file_lock);
   return ret;
 }

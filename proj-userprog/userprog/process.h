@@ -20,8 +20,9 @@ typedef void (*pthread_fun)(void*);
 typedef void (*stub_fun)(pthread_fun, void*);
 
 struct file_entry {
-   struct file *file;
+   void *      file;
    int         fd;
+   bool        is_dir;
    struct list_elem elem;
 };
 struct child_entry {

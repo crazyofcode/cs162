@@ -273,7 +273,10 @@ void process_exit(void) {
   for (e = list_begin(&cur->pcb->file); e != list_end(&cur->pcb->file); ) {
     struct file_entry *entry = list_entry(e, struct file_entry, elem);
     e = list_next(e);
-    file_close(entry->file);
+    if (entry->is_dir)
+      dir_close(entry->file);
+    else
+      file_close(entry->file);
     list_remove(&entry->elem);
     free(entry);
   }
@@ -420,7 +423,7 @@ bool load(const char* file_name, void (**eip)(void), void** esp) {
   process_activate();
 
   /* Open executable file. */
-  file = filesys_open(file_name);
+  file = filesys_open(file_name, NULL);
   if (file == NULL) {
     printf("load: %s: open failed\n", file_name);
     goto done;
