@@ -77,7 +77,7 @@ off_t file_read_at(struct file* file, void* buffer, off_t size, off_t file_ofs) 
 off_t file_write(struct file* file, const void* buffer, off_t size) {
   off_t sz = inode_length(file->inode);
   if (sz < file->pos + size)
-    inode_resize(file->inode, file->pos+size);
+    inode_resize(file->inode, file->pos+size-sz);
   off_t bytes_written = inode_write_at(file->inode, buffer, size, file->pos);
   file->pos += bytes_written;
   return bytes_written;
