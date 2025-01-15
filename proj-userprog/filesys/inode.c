@@ -75,6 +75,7 @@ static block_sector_t byte_to_sector(const struct inode* inode, off_t pos) {
    returns the same `struct inode'. */
 static struct list open_inodes;
 static struct list bcache_list;
+static struct lock bcache_lock;
 
 /* Initializes the inode module. */
 void inode_init(void) { 
@@ -90,17 +91,20 @@ void binit(void) {
     b->dirty = false;
     list_push_front(&bcache_list, &b->elem);
   }
+  lock_init(&bcache_lock);
 }
 
 struct buf *bread(struct block *device, block_sector_t idx) {
   struct buf *b = NULL;
   struct list_elem *e;
+  lock_acquire(&bcache_lock);
   for (e = list_begin(&bcache_list); e != list_end(&bcache_list); e = list_next(e)) {
     b = list_entry(e, struct buf, elem);
     if (b->dev == device && b->blockno == idx) {
       b->cnt++;
       list_remove(&b->elem);
       list_push_front(&bcache_list, &b->elem);
+      lock_release(&bcache_lock);
       return b;
     }
   }
@@ -118,12 +122,14 @@ struct buf *bread(struct block *device, block_sector_t idx) {
   list_push_front(&bcache_list, &b->elem);
 
   block_read(device, idx, b->data);
+  lock_release(&bcache_lock);
   return b;
 }
 
 void bwrite(struct block *device, block_sector_t idx, off_t off, off_t length, const uint8_t *data) {
   struct buf *b = NULL;
   struct list_elem *e;
+  lock_acquire(&bcache_lock);
   for (e = list_begin(&bcache_list); e != list_end(&bcache_list); e = list_next(e)) {
     b = list_entry(e, struct buf, elem);
     if (b->dev == device && b->blockno == idx) {
@@ -131,10 +137,12 @@ void bwrite(struct block *device, block_sector_t idx, off_t off, off_t length, c
       list_push_front(&bcache_list, &b->elem);
       b->dirty = true;
       memcpy(b->data + off, data, length);
+      lock_release(&bcache_lock);
       return;
     }
   }
 
+  lock_release(&bcache_lock);
   b = bread(device, idx);
   b->dirty = true;
   memcpy((void *)&b->data[off], data, length);
@@ -144,10 +152,9 @@ void bflush(void) {
   struct buf *b = NULL;
   struct list_elem *e;
   for (e = list_begin(&bcache_list); e != list_end(&bcache_list); e = list_next(e)) { b = list_entry(e, struct buf, elem);
-    if (b->dirty) {
-      b->dirty = false;
+    b = list_entry(e, struct buf, elem);
+    if (b->dev == fs_device)
       block_write(b->dev, b->blockno, b->data);
-    }
   }
 }
 
