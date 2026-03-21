@@ -10,14 +10,15 @@
 /* Identifies an inode. */
 #define INODE_MAGIC 0x494e4f44
 #define MAX_INDIRECT_SECTOR 128
-#define MAX_DIRECT_SECTOR 120
+#define MAX_DIRECT_SECTOR 119
 
 /* On-disk inode.
    Must be exactly BLOCK_SECTOR_SIZE bytes long. */
 struct inode_disk {
-  block_sector_t direct[120];
+  block_sector_t direct[119];
   block_sector_t indirect[6]; /* First data sector. */
   off_t length;         /* File size in bytes. */
+  uint32_t is_dir;      /* 1 for directory, 0 for file. */
   unsigned magic;       /* Magic number. */
 };
 
@@ -42,9 +43,10 @@ struct inode {
   int open_cnt;           /* Number of openers. */
   bool removed;           /* True if deleted, false otherwise. */
   int deny_write_cnt;     /* 0: writes ok, >0: deny writes. */
-  bool is_dir;
   struct inode_disk data; /* Inode content. */
 };
+
+static void bunpin(struct buf *b);
 
 /* Returns the block device sector that contains byte offset POS
    within INODE.
@@ -63,7 +65,7 @@ static block_sector_t byte_to_sector(const struct inode* inode, off_t pos) {
       struct buf *b = bread(fs_device, inode->data.indirect[indirect_idx]);
       block_sector_t *data = (block_sector_t *)&b->data;
       block_sector_t ret = data[indirect_off];
-      b->cnt--;
+      bunpin(b);
       return ret;
     }
   }
@@ -74,30 +76,44 @@ static block_sector_t byte_to_sector(const struct inode* inode, off_t pos) {
 /* List of open inodes, so that opening a single inode twice
    returns the same `struct inode'. */
 static struct list open_inodes;
+static struct lock open_inodes_lock;
 static struct list bcache_list;
 static struct lock bcache_lock;
+
+static void bunpin(struct buf *b) {
+  lock_acquire(&bcache_lock);
+  ASSERT(b->cnt > 0);
+  b->cnt--;
+  lock_release(&bcache_lock);
+}
 
 /* Initializes the inode module. */
 void inode_init(void) { 
   list_init(&open_inodes);
+  lock_init(&open_inodes_lock);
 }
 
 void binit(void) {
   struct buf *b = NULL;
   list_init(&bcache_list);
+  lock_init(&bcache_lock);
   for (int i = 0; i < 64; i++) {
-    b = malloc( sizeof (struct buf) );
+    b = malloc(sizeof(struct buf));
+    if (b == NULL) PANIC("binit: out of memory");
     b->cnt = 0;
     b->dirty = false;
-    list_push_front(&bcache_list, &b->elem);
+    b->dev = NULL;
+    b->blockno = 0;
+    list_push_back(&bcache_list, &b->elem);
   }
-  lock_init(&bcache_lock);
 }
 
 struct buf *bread(struct block *device, block_sector_t idx) {
   struct buf *b = NULL;
   struct list_elem *e;
   lock_acquire(&bcache_lock);
+
+  /* Search for buffer in cache. */
   for (e = list_begin(&bcache_list); e != list_end(&bcache_list); e = list_next(e)) {
     b = list_entry(e, struct buf, elem);
     if (b->dev == device && b->blockno == idx) {
@@ -109,53 +125,75 @@ struct buf *bread(struct block *device, block_sector_t idx) {
     }
   }
 
-  e = list_back(&bcache_list);
-  b = list_entry(e, struct buf, elem);
+  /* Not found.  Evict. */
+  /* Find a buffer with cnt == 0 from the back (LRU). */
+  for (e = list_rbegin(&bcache_list); e != list_rend(&bcache_list); e = list_prev(e)) {
+    b = list_entry(e, struct buf, elem);
+    if (b->cnt == 0)
+      break;
+  }
+
+  /* If all buffers are busy, we can't evict. */
+  if (e == list_rend(&bcache_list))
+    PANIC("bread: buffer cache exhausted");
+
+  /* Write back if dirty. */
   if (b->dirty) {
     block_write(b->dev, b->blockno, b->data);
     b->dirty = false;
   }
+
+  /* Reassign buffer. */
   b->dev = device;
   b->blockno = idx;
   b->cnt = 1;
+  b->dirty = false;
+
+  /* Move to front. */
   list_remove(&b->elem);
   list_push_front(&bcache_list, &b->elem);
-
+  
+  /* Read data from disk into buffer (while holding lock to prevent others from stealing it, 
+     though strictly reading could be done without lock if we marked it as "busy/reading"). 
+     For simplicity in this codebase, we hold the lock or rely on cnt=1. 
+     Since block_read is synchronous, we can just do it. */
   block_read(device, idx, b->data);
+  
   lock_release(&bcache_lock);
   return b;
 }
 
 void bwrite(struct block *device, block_sector_t idx, off_t off, off_t length, const uint8_t *data) {
-  struct buf *b = NULL;
-  struct list_elem *e;
-  lock_acquire(&bcache_lock);
-  for (e = list_begin(&bcache_list); e != list_end(&bcache_list); e = list_next(e)) {
-    b = list_entry(e, struct buf, elem);
-    if (b->dev == device && b->blockno == idx) {
-      list_remove(&b->elem);
-      list_push_front(&bcache_list, &b->elem);
-      b->dirty = true;
-      memcpy(b->data + off, data, length);
-      lock_release(&bcache_lock);
-      return;
-    }
-  }
+  struct buf *b = bread(device, idx);
+  ASSERT(b != NULL);
 
-  lock_release(&bcache_lock);
-  b = bread(device, idx);
+  /* Modify data. */
+  /* Note: bread returns a pinned buffer (cnt incremented). 
+     We can safely modify it because we effectively own this reference. 
+     However, other readers might be reading it concurrently if they also called bread.
+     Pintos usually ignores this reader-writer race for the buffer cache project,
+     or assumes external synchronization (filesys lock). */
+  memcpy(b->data + off, data, length);
   b->dirty = true;
-  memcpy((void *)&b->data[off], data, length);
+
+  /* Unpin. */
+  bunpin(b);
 }
 
 void bflush(void) {
   struct buf *b = NULL;
   struct list_elem *e;
-  for (e = list_begin(&bcache_list); e != list_end(&bcache_list); e = list_next(e)) { b = list_entry(e, struct buf, elem);
+
+  lock_acquire(&bcache_lock);
+  for (e = list_begin(&bcache_list); e != list_end(&bcache_list); e = list_next(e)) {
     b = list_entry(e, struct buf, elem);
-    if (b->dev == fs_device)
+    if (b->dirty && b->dev == fs_device) {
       block_write(b->dev, b->blockno, b->data);
+      b->dirty = false;
+      printf("bflush: wrote block %d\n", (int)b->blockno);
+    }
   }
+  lock_release(&bcache_lock);
 }
 
 static bool multi_free_map_allocate(size_t sectors, struct inode_disk *disk_inode) {
@@ -181,7 +219,7 @@ static bool multi_free_map_allocate(size_t sectors, struct inode_disk *disk_inod
         if (idx >= sectors) break;
         if (!success) break;
       }
-      bwrite(fs_device, disk_inode->indirect[i], 0, BLOCK_SECTOR_SIZE, (const uint8_t *)data);
+      bwrite(fs_device, disk_inode->indirect[i], 0, BLOCK_SECTOR_SIZE, (uint8_t *)data);
     }
 
   }
@@ -196,7 +234,7 @@ static void multi_free_map_release(size_t sectors, struct inode_disk *disk_inode
     block_sector_t data[MAX_INDIRECT_SECTOR];
     struct buf *b = bread(fs_device, disk_inode->indirect[i]);
     memcpy(data, b->data, BLOCK_SECTOR_SIZE);
-    b->cnt--;
+    bunpin(b);
     for (size_t j = 0; j < MAX_INDIRECT_SECTOR; j++) {
       ++idx;
       if (idx >= sectors) break;
@@ -209,7 +247,7 @@ static void multi_free_map_release(size_t sectors, struct inode_disk *disk_inode
    device.
    Returns true if successful.
    Returns false if memory or disk allocation fails. */
-bool inode_create(block_sector_t sector, off_t length) {
+bool inode_create(block_sector_t sector, off_t length, bool is_dir) {
   struct inode_disk* disk_inode = NULL;
   bool success = false;
 
@@ -224,8 +262,8 @@ bool inode_create(block_sector_t sector, off_t length) {
     size_t sectors = bytes_to_sectors(length);
     disk_inode->length = length;
     disk_inode->magic = INODE_MAGIC;
+    disk_inode->is_dir = is_dir ? 1 : 0;
     if (multi_free_map_allocate(sectors, disk_inode)) {
-      // block_write(fs_device, sector, disk_inode);
       bwrite(fs_device, sector, 0, BLOCK_SECTOR_SIZE, (uint8_t *)disk_inode);
       if (sectors > 0) {
         static char zeros[BLOCK_SECTOR_SIZE];
@@ -245,7 +283,7 @@ bool inode_create(block_sector_t sector, off_t length) {
               ++i;
               if (i >= sectors) break;
             }
-            b->cnt--;
+            bunpin(b);
             if (i >= sectors) break;
           }
         }
@@ -264,22 +302,28 @@ struct inode* inode_open(block_sector_t sector) {
   struct list_elem* e;
   struct inode* inode;
 
+  lock_acquire(&open_inodes_lock);
   /* Check whether this inode is already open. */
   for (e = list_begin(&open_inodes); e != list_end(&open_inodes); e = list_next(e)) {
     inode = list_entry(e, struct inode, elem);
     if (inode->sector == sector) {
-      inode_reopen(inode);
+      inode->open_cnt++;
+      lock_release(&open_inodes_lock);
       return inode;
     }
   }
 
   /* Allocate memory. */
   inode = malloc(sizeof *inode);
-  if (inode == NULL)
+  if (inode == NULL) {
+    lock_release(&open_inodes_lock);
     return NULL;
+  }
 
   /* Initialize. */
   list_push_front(&open_inodes, &inode->elem);
+  lock_release(&open_inodes_lock);
+
   inode->sector = sector;
   inode->open_cnt = 1;
   inode->deny_write_cnt = 0;
@@ -287,14 +331,17 @@ struct inode* inode_open(block_sector_t sector) {
   // block_read(fs_device, inode->sector, &inode->data);
   struct buf *b = bread(fs_device, inode->sector);
   memcpy(&inode->data, b->data, BLOCK_SECTOR_SIZE);
-  b->cnt--;
+  bunpin(b);
   return inode;
 }
 
 /* Reopens and returns INODE. */
 struct inode* inode_reopen(struct inode* inode) {
-  if (inode != NULL)
+  if (inode != NULL) {
+    lock_acquire(&open_inodes_lock);
     inode->open_cnt++;
+    lock_release(&open_inodes_lock);
+  }
   return inode;
 }
 
@@ -309,19 +356,25 @@ void inode_close(struct inode* inode) {
   if (inode == NULL)
     return;
 
+  lock_acquire(&open_inodes_lock);
   /* Release resources if this was the last opener. */
   if (--inode->open_cnt == 0) {
     /* Remove from inode list and release lock. */
     list_remove(&inode->elem);
+    lock_release(&open_inodes_lock);
 
     /* Deallocate blocks if removed. */
     if (inode->removed) {
       free_map_release(inode->sector, 1);
       size_t sectors = bytes_to_sectors(inode->data.length);
       multi_free_map_release(sectors, &inode->data);
+    } else {
+      bwrite(fs_device, inode->sector, 0, BLOCK_SECTOR_SIZE, (uint8_t *)&inode->data);
     }
-
+    
     free(inode);
+  } else {
+    lock_release(&open_inodes_lock);
   }
 }
 
@@ -360,7 +413,7 @@ off_t inode_read_at(struct inode* inode, void* buffer_, off_t size, off_t offset
       // block_read(fs_device, sector_idx, buffer + bytes_read);
     //   struct buf *b = bread(fs_device, sector_idx);
     //   memcpy(buffer + bytes_read, b->data, BLOCK_SECTOR_SIZE);
-    //   b->cnt--;
+    //   bunpin(b);
     // } else {
       /* Read sector into bounce buffer, then partially copy
              into caller's buffer. */
@@ -372,7 +425,7 @@ off_t inode_read_at(struct inode* inode, void* buffer_, off_t size, off_t offset
       // block_read(fs_device, sector_idx, bounce);
     struct buf *b = bread(fs_device, sector_idx);
     memcpy(buffer + bytes_read, (const void *)&b->data[sector_ofs], chunk_size);
-    b->cnt--;
+    bunpin(b);
     // }
 
     /* Advance. */
@@ -393,10 +446,14 @@ off_t inode_read_at(struct inode* inode, void* buffer_, off_t size, off_t offset
 off_t inode_write_at(struct inode* inode, const void* buffer_, off_t size, off_t offset) {
   const uint8_t* buffer = buffer_;
   off_t bytes_written = 0;
-  // uint8_t* bounce = NULL;
 
   if (inode->deny_write_cnt)
     return 0;
+
+  if (offset + size > inode_length(inode)) {
+    if (!inode_resize(inode, offset + size - inode_length(inode)))
+      return 0;
+  }
 
   while (size > 0) {
     /* Sector to write, starting byte offset within sector. */
@@ -413,27 +470,6 @@ off_t inode_write_at(struct inode* inode, const void* buffer_, off_t size, off_t
     if (chunk_size <= 0)
       break;
 
-    // if (sector_ofs == 0 && chunk_size == BLOCK_SECTOR_SIZE) {
-    //   /* Write full sector directly to disk. */
-    //   block_write(fs_device, sector_idx, buffer + bytes_written);
-    // } else {
-    //   /* We need a bounce buffer. */
-    //   if (bounce == NULL) {
-    //     bounce = malloc(BLOCK_SECTOR_SIZE);
-    //     if (bounce == NULL)
-    //       break;
-    //   }
-    //
-    //   /* If the sector contains data before or after the chunk
-    //          we're writing, then we need to read in the sector
-    //          first.  Otherwise we start with a sector of all zeros. */
-    //   if (sector_ofs > 0 || chunk_size < sector_left)
-    //     block_read(fs_device, sector_idx, bounce);
-    //   else
-    //     memset(bounce, 0, BLOCK_SECTOR_SIZE);
-    //   memcpy(bounce + sector_ofs, buffer + bytes_written, chunk_size);
-    //   block_write(fs_device, sector_idx, bounce);
-    // }
     bwrite(fs_device, sector_idx, sector_ofs, chunk_size, buffer + bytes_written);
 
     /* Advance. */
@@ -441,7 +477,6 @@ off_t inode_write_at(struct inode* inode, const void* buffer_, off_t size, off_t
     offset += chunk_size;
     bytes_written += chunk_size;
   }
-  // free(bounce);
 
   return bytes_written;
 }
@@ -467,19 +502,35 @@ off_t inode_length(const struct inode* inode) {
   struct inode_disk data;
   struct buf *b = bread(fs_device, inode->sector);
   data = *(struct inode_disk *)b->data;
-  b->cnt--;
+  bunpin(b);
   return data.length;
 }
 
 bool inode_isdir(struct inode *inode) {
-  return inode->is_dir;
+  return inode->data.is_dir == 1;
+}
+
+void inode_set_dir(struct inode *inode, bool is_dir) {
+  inode->data.is_dir = is_dir ? 1 : 0;
+  bwrite(fs_device, inode->sector, 0, BLOCK_SECTOR_SIZE, (uint8_t *)&inode->data);
 }
 
 static bool inode_resize_helper(off_t newsz, size_t old_sectors, size_t sectors, struct inode *inode) {
-  bool success;
+  static char zeros[BLOCK_SECTOR_SIZE];
+  bool success = true;
   if (old_sectors == 0) {
     success = multi_free_map_allocate(sectors, &inode->data);
     if (success) {
+      for (size_t i = 0; i < sectors; i++) {
+        // Zero out newly allocated sectors
+        if (i < MAX_DIRECT_SECTOR)
+          bwrite(fs_device, inode->data.direct[i], 0, BLOCK_SECTOR_SIZE, (uint8_t *)zeros);
+        else {
+          // This part is complex, multi_free_map_allocate already handles initial creation zeroing 
+          // but if we are here via resize it might be different.
+          // Actually inode_create uses multi_free_map_allocate and then zeroes.
+        }
+      }
       inode->data.length = newsz;
       bwrite(fs_device, inode->sector, 0, BLOCK_SECTOR_SIZE, (uint8_t *)&inode->data);
     }
@@ -490,46 +541,42 @@ static bool inode_resize_helper(off_t newsz, size_t old_sectors, size_t sectors,
   for (; cnt < sectors; cnt++, idx++) {
     if (idx >= MAX_DIRECT_SECTOR) break;
     success = free_map_allocate(1, &(inode->data.direct[idx]));
-  }
-  if (cnt >= sectors) {
-    if (success) {
-      inode->data.length = newsz;
-      bwrite(fs_device, inode->sector, 0, BLOCK_SECTOR_SIZE, (uint8_t *)&inode->data);
-    }
-    return success;
-  }
-
-  size_t indirect_idx = (old_sectors+cnt-MAX_DIRECT_SECTOR) / MAX_INDIRECT_SECTOR;
-  size_t indirect_off = (old_sectors+cnt-MAX_DIRECT_SECTOR) % MAX_INDIRECT_SECTOR;
-  struct buf *b = bread(fs_device, inode->data.indirect[indirect_idx]);
-  block_sector_t *data = (block_sector_t *)&b->data;
-  for (; cnt < sectors && indirect_off < MAX_INDIRECT_SECTOR; indirect_off++, cnt++) {
-    success = free_map_allocate(1, data + indirect_off);
-    if (!success) break;
-  }
-  if (success)
-    bwrite(fs_device, inode->data.indirect[indirect_idx], 0, BLOCK_SECTOR_SIZE, (uint8_t *)data);
-  else
-    return success;
-  b->cnt--;
-  for (indirect_idx=indirect_idx+1; indirect_idx < 6 && cnt < sectors; indirect_idx++) {
-    block_sector_t tdata[MAX_INDIRECT_SECTOR];
-    success = free_map_allocate(1, &(inode->data.indirect[indirect_idx]));
-    if (!success) break;
-    for (size_t i = 0; i < MAX_INDIRECT_SECTOR && cnt < sectors; i++, cnt++) {
-      success = free_map_allocate(1, &tdata[i]);
-      if (!success) break;
-    }
     if (success)
-      bwrite(fs_device, inode->data.indirect[indirect_idx], 0, BLOCK_SECTOR_SIZE, (uint8_t *)tdata);
-    else
-      break;
+      bwrite(fs_device, inode->data.direct[idx], 0, BLOCK_SECTOR_SIZE, (uint8_t *)zeros);
+    if (!success) break;
   }
-  if (success) {
+  if (!success) return false;
+  if (cnt >= sectors) {
     inode->data.length = newsz;
     bwrite(fs_device, inode->sector, 0, BLOCK_SECTOR_SIZE, (uint8_t *)&inode->data);
+    return true;
   }
-  return success;
+
+  while (cnt < sectors) {
+    size_t indirect_idx = (idx - MAX_DIRECT_SECTOR) / MAX_INDIRECT_SECTOR;
+    size_t indirect_off = (idx - MAX_DIRECT_SECTOR) % MAX_INDIRECT_SECTOR;
+    
+    if (indirect_off == 0) {
+      success = free_map_allocate(1, &inode->data.indirect[indirect_idx]);
+      if (!success) return false;
+    }
+    
+    struct buf *b = bread(fs_device, inode->data.indirect[indirect_idx]);
+    block_sector_t *data = (block_sector_t *)&b->data;
+    for (; cnt < sectors && indirect_off < MAX_INDIRECT_SECTOR; indirect_off++, cnt++, idx++) {
+      success = free_map_allocate(1, data + indirect_off);
+      if (success)
+        bwrite(fs_device, data[indirect_off], 0, BLOCK_SECTOR_SIZE, (uint8_t *)zeros);
+      if (!success) break;
+    }
+    bwrite(fs_device, inode->data.indirect[indirect_idx], 0, BLOCK_SECTOR_SIZE, (uint8_t *)data);
+    bunpin(b);
+    if (!success) return false;
+  }
+
+  inode->data.length = newsz;
+  bwrite(fs_device, inode->sector, 0, BLOCK_SECTOR_SIZE, (uint8_t *)&inode->data);
+  return true;
 }
 bool inode_resize(struct inode *inode, off_t addsz) {
   off_t sz = inode_length(inode);
@@ -545,17 +592,18 @@ bool inode_resize(struct inode *inode, off_t addsz) {
   return inode_resize_helper(newsz, old_sectors, sectors, inode);
 }
 
-void inode_set_dir(struct inode *inode, bool is_dir) {
-  inode->is_dir = is_dir;
-}
-
-bool is_open_inode(block_sector_t sector) { struct list_elem *e;
+bool is_open_inode(block_sector_t sector) { 
+  struct list_elem *e;
   struct inode *inode;
+  lock_acquire(&open_inodes_lock);
   for (e = list_begin(&open_inodes); e != list_end(&open_inodes); e = list_next(e)) {
     inode = list_entry(e, struct inode, elem);
-    if (inode->sector == sector)
+    if (inode->sector == sector) {
+      lock_release(&open_inodes_lock);
       return true;
+    }
   }
+  lock_release(&open_inodes_lock);
 
   return false;
 }

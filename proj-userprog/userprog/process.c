@@ -107,7 +107,6 @@ static void start_process(void* file_name_) {
     sema_init(&t->pcb->sema_exec, 0);
     list_init(&t->pcb->child_list);
     list_init(&t->pcb->file);
-    lock_init(&t->pcb->file_lock);
     strlcpy(t->pcb->process_name, file_name, sizeof t->name);
   }
 
@@ -269,7 +268,7 @@ void process_exit(void) {
   }
 
   // 关闭打开的文件
-  lock_acquire(&cur->pcb->file_lock);
+  lock_acquire(&filesys_lock);
   for (e = list_begin(&cur->pcb->file); e != list_end(&cur->pcb->file); ) {
     struct file_entry *entry = list_entry(e, struct file_entry, elem);
     e = list_next(e);
@@ -280,7 +279,7 @@ void process_exit(void) {
     list_remove(&entry->elem);
     free(entry);
   }
-  lock_release(&cur->pcb->file_lock);
+  lock_release(&filesys_lock);
   // if (cur->pcb->entry != NULL)  free(cur->pcb->entry);
   for (e = list_begin(&cur->pcb->child_list); e != list_end(&cur->pcb->child_list); e = 
             list_next(e)) {

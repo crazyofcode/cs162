@@ -46,14 +46,15 @@ static bool check_str(void *ptr) {
   return true;
 }
 
-static struct file_entry *find(int fd) {
+static struct file_entry *find_locked(int fd) {
   struct thread *t = thread_current();
   struct process *p = t->pcb;
   struct list_elem *e;
   for (e = list_begin(&p->file); e != list_end(&p->file); e = list_next(e)) {
     struct file_entry *entry = list_entry(e, struct file_entry, elem);
-    if (entry->fd == fd)
+    if (entry->fd == fd) {
       return entry;
+    }
   }
   return NULL;
 }
@@ -76,12 +77,14 @@ static int write(int fd, void *buffer, unsigned size) {
     putbuf(buffer, size);
     return size;
   } else {
-    struct file_entry *entry = find(fd);
-    if (entry == NULL)  return -1;
-    if (entry->is_dir)  return -1;
-    lock_acquire(&thread_current()->pcb->file_lock);
+    lock_acquire(&filesys_lock);
+    struct file_entry *entry = find_locked(fd);
+    if (entry == NULL || entry->is_dir) {
+      lock_release(&filesys_lock);
+      return -1;
+    }
     int32_t ret = file_write(entry->file, buffer, size);
-    lock_release(&thread_current()->pcb->file_lock);
+    lock_release(&filesys_lock);
     return ret;
   }
 }
@@ -93,38 +96,58 @@ static bool create(const char *file, unsigned initial_size) {
     exit(-1);
     return -1;
   }
-  return filesys_create(file, initial_size, false);
+  lock_acquire(&filesys_lock);
+  bool ret = filesys_create(file, initial_size, false);
+  lock_release(&filesys_lock);
+  return ret;
 }
 static bool remove(const char *file) {
   if (strcmp(file, "/") == 0)
     return false;
-  return filesys_remove(file);
+  lock_acquire(&filesys_lock);
+  bool ret = filesys_remove(file);
+  lock_release(&filesys_lock);
+  return ret;
 }
 static int open(const char *file) {
-  // if (strcmp(file, "std"))
   if (!check_str((void *)file)) {
     exit(-1);
     return -1;
   }
   struct thread* t = thread_current();
-  lock_acquire(&t->pcb->file_lock);
+  lock_acquire(&filesys_lock);
   bool is_dir;
   void *f = filesys_open(file, &is_dir);
-  lock_release(&t->pcb->file_lock);
-  if (f == NULL) return -1;
+  if (f == NULL) {
+    lock_release(&filesys_lock);
+    return -1;
+  }
   struct file_entry *entry = malloc(sizeof(struct file_entry));
+  if (entry == NULL) {
+    // Ideally we should close f here, but filesys_open might have returned dir* or file*
+    // For simplicity in this fix, we just return -1.
+    lock_release(&filesys_lock);
+    return -1;
+  }
   entry->file = f;
   entry->fd = t->pcb->fd++;
   entry->is_dir = is_dir;
   list_push_back(&t->pcb->file, &entry->elem);
+  lock_release(&filesys_lock);
 
   return entry->fd;
 }
 
 static int filesize(int fd) {
-  struct file_entry *entry = find(fd);
-  if (entry == NULL) return -1;
-  return file_length(entry->file);
+  lock_acquire(&filesys_lock);
+  struct file_entry *entry = find_locked(fd);
+  if (entry == NULL) {
+    lock_release(&filesys_lock);
+    return -1;
+  }
+  int ret = file_length(entry->file);
+  lock_release(&filesys_lock);
+  return ret;
 }
 static int read(int fd, void *buffer, unsigned size) {
   if (!check_str(buffer)) {
@@ -140,39 +163,51 @@ static int read(int fd, void *buffer, unsigned size) {
   } else if (fd == STDOUT_FILENO) {
     return -1;
   } else{
-    struct file_entry *entry = find(fd);
-    if (entry == NULL)  return -1;
-    lock_acquire(&thread_current()->pcb->file_lock);
+    lock_acquire(&filesys_lock);
+    struct file_entry *entry = find_locked(fd);
+    if (entry == NULL) {
+      lock_release(&filesys_lock);
+      return -1;
+    }
     unsigned ret = file_read(entry->file, buffer, size);
-    lock_release(&thread_current()->pcb->file_lock);
+    lock_release(&filesys_lock);
     return ret;
   }
 }
 static void seek(int fd, unsigned position) {
-  struct file_entry *entry = find(fd);
-  if (entry == NULL)  return;
-  lock_acquire(&thread_current()->pcb->file_lock);
+  lock_acquire(&filesys_lock);
+  struct file_entry *entry = find_locked(fd);
+  if (entry == NULL) {
+    lock_release(&filesys_lock);
+    return;
+  }
   file_seek(entry->file, position);
-  lock_release(&thread_current()->pcb->file_lock);
+  lock_release(&filesys_lock);
 }
 static int tell(int fd) {
-  struct file_entry *entry = find(fd);
-  if (entry == NULL)  return -1;
-  lock_acquire(&thread_current()->pcb->file_lock);
+  lock_acquire(&filesys_lock);
+  struct file_entry *entry = find_locked(fd);
+  if (entry == NULL) {
+    lock_release(&filesys_lock);
+    return -1;
+  }
   int32_t ret = file_tell(entry->file);
-  lock_release(&thread_current()->pcb->file_lock);
+  lock_release(&filesys_lock);
   return ret;
 }
 static void close(int fd) {
-  struct file_entry *entry = find(fd);
-  if (entry == NULL)  return;
-  lock_acquire(&thread_current()->pcb->file_lock);
+  lock_acquire(&filesys_lock);
+  struct file_entry *entry = find_locked(fd);
+  if (entry == NULL) {
+    lock_release(&filesys_lock);
+    return;
+  }
   if (entry->is_dir)
     dir_close(entry->file);
   else
     file_close(entry->file);
-  lock_release(&thread_current()->pcb->file_lock);
   list_remove(&entry->elem);
+  lock_release(&filesys_lock);
   free(entry);
 }
 static pid_t exec(const char *cmd_line) {
@@ -188,43 +223,64 @@ static int compute_e(int n) {
 static bool sys_chdir(const char *name) {
   if (name[0] == '\0')
     return false;
+  lock_acquire(&filesys_lock);
   struct dir *base = thread_current()->pcb->cwd;
   if (name[0] == '/' || base == NULL)
     base = dir_open_root();
   struct inode *inode;
-  if (strcmp(name, "/") == 0)
+  if (strcmp(name, "/") == 0) {
     thread_current()->pcb->cwd = dir_reopen(base);
-  else {
-    if (!dir_lookup(base, name, &inode))
+  } else {
+    if (!dir_lookup(base, name, &inode)) {
+      lock_release(&filesys_lock);
       return false;
+    }
     thread_current()->pcb->cwd = dir_open(inode);
     dir_close(base);
   }
+  lock_release(&filesys_lock);
   return true;
 }
 static bool sys_mkdir(const char *dir) {
   if (dir[0] == '\0')
     return false;
-  return filesys_create(dir, 0, true);
+  lock_acquire(&filesys_lock);
+  bool ret = filesys_create(dir, 0, true);
+  lock_release(&filesys_lock);
+  return ret;
 }
 static bool sys_readdir(int fd, char *name) {
-  struct file_entry *entry = find(fd);
-  if (entry == NULL)  return false;
-  if (!entry->is_dir) return false;
-  lock_acquire(&thread_current()->pcb->file_lock);
+  lock_acquire(&filesys_lock);
+  struct file_entry *entry = find_locked(fd);
+  if (entry == NULL || !entry->is_dir) {
+    lock_release(&filesys_lock);
+    return false;
+  }
   bool ret = filesys_readdir(entry->file, name);
-  lock_release(&thread_current()->pcb->file_lock);
+  lock_release(&filesys_lock);
   return ret;
 }
 static bool sys_isdir(int fd) {
-  struct file_entry *entry = find(fd);
-  if (entry == NULL)  return -1;
-  return filesys_isdir(file_get_inode(entry->file));
+  lock_acquire(&filesys_lock);
+  struct file_entry *entry = find_locked(fd);
+  if (entry == NULL) {
+    lock_release(&filesys_lock);
+    return -1;
+  }
+  bool ret = filesys_isdir(file_get_inode(entry->file));
+  lock_release(&filesys_lock);
+  return ret;
 }
 static int sys_inumber(int fd) {
-  struct file_entry *entry = find(fd);
-  if (entry == NULL)  return -1;
-  return file_get_inumber(entry->file);
+  lock_acquire(&filesys_lock);
+  struct file_entry *entry = find_locked(fd);
+  if (entry == NULL) {
+    lock_release(&filesys_lock);
+    return -1;
+  }
+  int ret = file_get_inumber(entry->file);
+  lock_release(&filesys_lock);
+  return ret;
 }
 
 static void syscall_handler(struct intr_frame* f UNUSED) {

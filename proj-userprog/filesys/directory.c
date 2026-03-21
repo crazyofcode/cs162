@@ -24,7 +24,7 @@ struct dir_entry {
    given SECTOR.  Returns true if successful, false on failure. */
 bool dir_create(struct dir *parent, block_sector_t sector, size_t entry_cnt) {
   bool success;
-  success = inode_create(sector, entry_cnt * sizeof(struct dir_entry));
+  success = inode_create(sector, entry_cnt * sizeof(struct dir_entry), true);
 
   if (success) {
     struct inode *new_inode =inode_open(sector);

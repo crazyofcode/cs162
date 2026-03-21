@@ -6,9 +6,11 @@
 #include "filesys/free-map.h"
 #include "filesys/inode.h"
 #include "filesys/directory.h"
+#include "threads/synch.h"
 
 /* Partition that contains the file system. */
 struct block* fs_device;
+struct lock filesys_lock;
 
 static void do_format(void);
 
@@ -22,6 +24,7 @@ void filesys_init(bool format) {
   if (fs_device == NULL)
     PANIC("No file system device found, can't initialize file system.");
 
+  lock_init(&filesys_lock);
   inode_init();
   free_map_init();
 
@@ -88,7 +91,7 @@ bool filesys_create(const char* name, off_t initial_size, bool is_dir) {
 
   if (success) {
     success = (dir != NULL && free_map_allocate(1, &inode_sector) &&
-                  inode_create(inode_sector, initial_size) && dir_add(dir, fname, inode_sector, is_dir));
+                  inode_create(inode_sector, initial_size, is_dir) && dir_add(dir, fname, inode_sector, is_dir));
   }
   if (!success && inode_sector != 0)
     free_map_release(inode_sector, 1);
@@ -113,9 +116,11 @@ void* filesys_open(const char* name, bool *is_dir_entry) {
   if (strcmp(name, "/") == 0) {
     base_dir = dir_open_root();
     inode = dir_get_inode(base_dir);
-    struct file *file = file_open(inode);
+    bool is_dir = inode_isdir(inode);
+    if (is_dir_entry != NULL)
+      *is_dir_entry = is_dir;
     dir_close(base_dir);
-    return file;
+    return (void *)dir_open(inode);
   }
   if (name[0] == '/' || base == NULL)
     base_dir = dir_open_root();

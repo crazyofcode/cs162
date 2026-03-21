@@ -58,7 +58,6 @@ struct process {
 
 	// file
   int fd;
-  struct lock file_lock;
   struct list file;
 
   struct file *exec_file;
